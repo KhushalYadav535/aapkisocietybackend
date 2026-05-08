@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: aapkisociety-backend
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health/live
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: POSTGRES_ONLY
+        value: "true"
+      # Set these manually in Render Dashboard (sensitive values):
+      # DATABASE_URL
+      # JWT_SECRET
+      # JWT_EXPIRES_IN
+      # FRONTEND_URL
