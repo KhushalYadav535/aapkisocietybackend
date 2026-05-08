@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/seeders/seed.js",
     "migrate:postgres": "node src/scripts/migrate-to-postgres.js",
-    "start:pg-only": "cross-env POSTGRES_ONLY=true node src/server.js"
+    "start:pg-only": "cross-env POSTGRES_ONLY=true node src/server.js",
+    "seed:postgres": "node src/seeders/seed.postgres.js"
   },
   "dependencies": {
     "express": "^4.18.2",
