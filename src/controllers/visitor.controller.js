@@ -145,8 +145,8 @@ exports.checkout = (req, res) => {
     
     const now = new Date().toISOString();
     db.get('visitors').find({ id: req.params.id }).assign({ check_out: now, status: 'CHECKED_OUT' }).write();
-    const visitor = db.get('visitors').find({ id: req.params.id }).value();
-    res.json({ visitor });
+    const updatedVisitor = db.get('visitors').find({ id: req.params.id }).value();
+    res.json({ visitor: updatedVisitor });
   } catch (error) {
     res.status(500).json({ error: 'Failed to checkout visitor' });
   }
@@ -178,8 +178,8 @@ exports.approve = (req, res) => {
     }
     
     db.get('visitors').find({ id: req.params.id }).assign({ status: 'APPROVED', approved_by: req.user.id }).write();
-    const visitor = db.get('visitors').find({ id: req.params.id }).value();
-    res.json({ visitor });
+    const updatedVisitor = db.get('visitors').find({ id: req.params.id }).value();
+    res.json({ visitor: updatedVisitor });
   } catch (error) {
     res.status(500).json({ error: 'Failed to approve visitor' });
   }
