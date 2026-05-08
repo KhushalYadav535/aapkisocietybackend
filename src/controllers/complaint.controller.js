@@ -150,8 +150,8 @@ exports.update = (req, res) => {
     ['title', 'description', 'category', 'priority', 'status'].forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
     updates.updated_at = new Date().toISOString();
     db.get('complaints').find({ id: req.params.id }).assign(updates).write();
-    const complaint = db.get('complaints').find({ id: req.params.id }).value();
-    res.json({ complaint });
+    const updatedComplaint = db.get('complaints').find({ id: req.params.id }).value();
+    res.json({ complaint: updatedComplaint });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update complaint' });
   }
@@ -228,8 +228,8 @@ exports.close = (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
     db.get('complaints').find({ id: req.params.id }).assign({ status: 'CLOSED', updated_at: new Date().toISOString() }).write();
-    const complaint = db.get('complaints').find({ id: req.params.id }).value();
-    res.json({ complaint });
+    const updatedComplaint = db.get('complaints').find({ id: req.params.id }).value();
+    res.json({ complaint: updatedComplaint });
   } catch (error) {
     res.status(500).json({ error: 'Failed to close complaint' });
   }
