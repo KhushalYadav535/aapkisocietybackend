@@ -25,6 +25,8 @@ const notificationRoutes = require('./routes/notification.routes');
 const privacyRoutes = require('./routes/privacy.routes');
 const oauthRoutes = require('./routes/oauth.routes');
 const taxRoutes = require('./routes/tax.routes');
+const accountingRoutes = require('./routes/accounting.routes');
+const auditRoutes = require('./routes/audit.routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -97,6 +99,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/privacy', privacyRoutes);
 app.use('/api/oauth', oauthRoutes);
 app.use('/api/tax', taxRoutes);
+app.use('/api/accounting', accountingRoutes);
+app.use('/api/audit', auditRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {
