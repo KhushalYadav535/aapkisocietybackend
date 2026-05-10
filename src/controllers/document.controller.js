@@ -5,24 +5,31 @@ const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/pos
 const DOC_CATEGORIES = ['AGREEMENT', 'RECEIPT', 'COMPLIANCE', 'MAINTENANCE', 'INSURANCE', 'PERMIT', 'OTHER'];
 
 const ensureDocumentTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".documents (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      title TEXT,
-      description TEXT,
-      category TEXT DEFAULT 'OTHER',
-      flat_id TEXT,
-      file_name TEXT,
-      file_path TEXT,
-      file_size INTEGER,
-      file_type TEXT,
-      uploaded_by TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".documents (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        title TEXT,
+        description TEXT,
+        category TEXT DEFAULT 'OTHER',
+        flat_id TEXT,
+        file_name TEXT,
+        file_path TEXT,
+        file_size INTEGER,
+        file_type TEXT,
+        uploaded_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getAll = (req, res) => {
@@ -31,7 +38,7 @@ exports.getAll = (req, res) => {
     const societyId = req.user.society_id;
 
     if (isPostgresEnabled) {
-      return ensurePlatformSchema().then(async () => {
+      return ensureDocumentTables(societyId).then(async () => {
         let query = `SELECT * FROM \"society_${societyId}\".documents WHERE 1=1`;
         const params = [];
         let idx = 1;

@@ -3,37 +3,44 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureStaffTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".staff (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      name TEXT NOT NULL,
-      phone TEXT,
-      staff_type TEXT,
-      address TEXT,
-      aadhaar_number TEXT,
-      salary NUMERIC DEFAULT 0,
-      duty_timing TEXT,
-      is_active INTEGER DEFAULT 1,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".staff_attendance (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      staff_id TEXT,
-      attendance_date TIMESTAMPTZ,
-      check_in TIMESTAMPTZ,
-      check_out TIMESTAMPTZ,
-      status TEXT DEFAULT 'PRESENT',
-      staff_type TEXT,
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".staff (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        name TEXT NOT NULL,
+        phone TEXT,
+        staff_type TEXT,
+        address TEXT,
+        aadhaar_number TEXT,
+        salary NUMERIC DEFAULT 0,
+        duty_timing TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".staff_attendance (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        staff_id TEXT,
+        attendance_date TIMESTAMPTZ,
+        check_in TIMESTAMPTZ,
+        check_out TIMESTAMPTZ,
+        status TEXT DEFAULT 'PRESENT',
+        staff_type TEXT,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getAll = (req, res) => {

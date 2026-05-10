@@ -3,19 +3,26 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, withTenant } = require('../config/postgres');
 
 const ensureMandateTables = async (client) => {
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS mandates (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      member_id TEXT,
-      type TEXT,
-      amount_limit NUMERIC,
-      status TEXT,
-      provider_ref TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mandates (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        member_id TEXT,
+        type TEXT,
+        amount_limit NUMERIC,
+        status TEXT,
+        provider_ref TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getMandates = (req, res) => {

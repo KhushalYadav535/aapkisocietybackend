@@ -3,38 +3,45 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureVehicleTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vehicles (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      flat_id TEXT,
-      vehicle_number TEXT,
-      vehicle_type TEXT,
-      make_model TEXT,
-      color TEXT,
-      sticker_number TEXT,
-      parking_slot TEXT,
-      rc_book_url TEXT,
-      is_active BOOLEAN DEFAULT true,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".parking_slots (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      slot_number TEXT,
-      slot_type TEXT,
-      floor TEXT,
-      section TEXT,
-      flat_id TEXT,
-      is_available INTEGER DEFAULT 1,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vehicles (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        flat_id TEXT,
+        vehicle_number TEXT,
+        vehicle_type TEXT,
+        make_model TEXT,
+        color TEXT,
+        sticker_number TEXT,
+        parking_slot TEXT,
+        rc_book_url TEXT,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".parking_slots (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        slot_number TEXT,
+        slot_type TEXT,
+        floor TEXT,
+        section TEXT,
+        flat_id TEXT,
+        is_available INTEGER DEFAULT 1,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getAll = (req, res) => {

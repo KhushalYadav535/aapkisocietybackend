@@ -6,26 +6,33 @@ const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/pos
 const STATUS = { PENDING: 'PENDING', APPROVED: 'APPROVED', REJECTED: 'REJECTED', EXPIRED: 'EXPIRED' };
 
 const ensureTenantTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".tenants (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      flat_id TEXT,
-      owner_id TEXT,
-      tenant_name TEXT,
-      tenant_email TEXT,
-      tenant_phone TEXT,
-      lease_start DATE,
-      lease_end DATE,
-      rent_amount NUMERIC,
-      status TEXT DEFAULT 'PENDING',
-      rejection_reason TEXT,
-      termination_reason TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".tenants (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        flat_id TEXT,
+        owner_id TEXT,
+        tenant_name TEXT,
+        tenant_email TEXT,
+        tenant_phone TEXT,
+        lease_start DATE,
+        lease_end DATE,
+        rent_amount NUMERIC,
+        status TEXT DEFAULT 'PENDING',
+        rejection_reason TEXT,
+        termination_reason TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getAll = (req, res) => {

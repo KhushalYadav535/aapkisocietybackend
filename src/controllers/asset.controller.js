@@ -3,48 +3,55 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled } = require('../config/postgres');
 
 const ensureAssetTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".assets (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      asset_name TEXT NOT NULL,
-      asset_code TEXT UNIQUE,
-      category TEXT,
-      location TEXT,
-      make_model TEXT,
-      serial_number TEXT,
-      purchase_date DATE,
-      purchase_amount NUMERIC(12,2),
-      warranty_expiry DATE,
-      amc_vendor TEXT,
-      amc_expiry DATE,
-      amc_amount NUMERIC(12,2),
-      last_serviced DATE,
-      next_service_due DATE,
-      status TEXT DEFAULT 'ACTIVE',
-      notes TEXT,
-      qr_code TEXT UNIQUE,
-      created_by TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".asset_service_logs (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      asset_id TEXT,
-      service_type TEXT,
-      service_date DATE,
-      vendor_name TEXT,
-      cost NUMERIC(12,2),
-      description TEXT,
-      next_due DATE,
-      logged_by TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".assets (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        asset_name TEXT NOT NULL,
+        asset_code TEXT UNIQUE,
+        category TEXT,
+        location TEXT,
+        make_model TEXT,
+        serial_number TEXT,
+        purchase_date DATE,
+        purchase_amount NUMERIC(12,2),
+        warranty_expiry DATE,
+        amc_vendor TEXT,
+        amc_expiry DATE,
+        amc_amount NUMERIC(12,2),
+        last_serviced DATE,
+        next_service_due DATE,
+        status TEXT DEFAULT 'ACTIVE',
+        notes TEXT,
+        qr_code TEXT UNIQUE,
+        created_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".asset_service_logs (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        asset_id TEXT,
+        service_type TEXT,
+        service_date DATE,
+        vendor_name TEXT,
+        cost NUMERIC(12,2),
+        description TEXT,
+        next_due DATE,
+        logged_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 // GET /api/assets

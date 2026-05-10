@@ -2,56 +2,70 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled } = require('../config/postgres');
 
+const _tenantBillingInitLocks = new Map();
+
 const ensureTenantBillingTables = async (client) => {
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS bills (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      flat_id TEXT,
-      member_id TEXT,
-      bill_number TEXT,
-      bill_date DATE,
-      due_date DATE,
-      amount NUMERIC,
-      tax_amount NUMERIC,
-      total_amount NUMERIC,
-      paid_amount NUMERIC DEFAULT 0,
-      status TEXT,
-      bill_type TEXT,
-      billing_period TEXT,
-      description TEXT,
-      created_by TEXT,
-      approved_by TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS bill_items (
-      id TEXT PRIMARY KEY,
-      bill_id TEXT,
-      head_name TEXT,
-      amount NUMERIC,
-      tax_rate NUMERIC,
-      tax_amount NUMERIC,
-      total NUMERIC
-    );
-  `);
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS payments (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      bill_id TEXT,
-      member_id TEXT,
-      amount NUMERIC,
-      payment_method TEXT,
-      payment_reference TEXT,
-      gateway_transaction_id TEXT,
-      status TEXT,
-      payment_date TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
+  const schema = client.database || 'default'; // we just need a key, but wait, client doesn't expose schema easily here.
+  // Actually, we can just use a single promise per tenant?
+  // We can't access tenantId from `client` easily. Let's just catch the specific error and ignore it, because it means the table exists!
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS bills (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        flat_id TEXT,
+        member_id TEXT,
+        bill_number TEXT,
+        bill_date DATE,
+        due_date DATE,
+        amount NUMERIC,
+        tax_amount NUMERIC,
+        total_amount NUMERIC,
+        paid_amount NUMERIC DEFAULT 0,
+        status TEXT,
+        bill_type TEXT,
+        billing_period TEXT,
+        description TEXT,
+        created_by TEXT,
+        approved_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS bill_items (
+        id TEXT PRIMARY KEY,
+        bill_id TEXT,
+        head_name TEXT,
+        amount NUMERIC,
+        tax_rate NUMERIC,
+        tax_amount NUMERIC,
+        total NUMERIC
+      );
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS payments (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        bill_id TEXT,
+        member_id TEXT,
+        amount NUMERIC,
+        payment_method TEXT,
+        payment_reference TEXT,
+        gateway_transaction_id TEXT,
+        status TEXT,
+        payment_date TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+  } catch (err) {
+    // If the error is 'type already exists', it means another request just created it.
+    if (err.message && err.message.includes('already exists')) {
+      console.log('Ignored concurrent table creation error in billing:', err.message);
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getAllBills = (req, res) => {

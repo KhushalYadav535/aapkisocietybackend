@@ -3,54 +3,61 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureMeetingTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".meetings (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      title TEXT,
-      description TEXT,
-      meeting_type TEXT DEFAULT 'AGM',
-      status TEXT DEFAULT 'SCHEDULED',
-      convened_by TEXT,
-      meeting_date DATE,
-      start_time TEXT,
-      end_time TEXT,
-      location TEXT,
-      agenda_items JSONB,
-      is_online BOOLEAN DEFAULT false,
-      meeting_link TEXT,
-      minutes TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".polls (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      meeting_id TEXT,
-      title TEXT,
-      description TEXT,
-      poll_type TEXT DEFAULT 'OPEN',
-      options JSONB,
-      total_votes INTEGER DEFAULT 0,
-      end_date DATE,
-      min_votes_required INTEGER DEFAULT 1,
-      status TEXT DEFAULT 'ACTIVE',
-      created_by TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".poll_votes (
-      id TEXT PRIMARY KEY,
-      poll_id TEXT,
-      user_id TEXT,
-      option_id TEXT,
-      voted_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".meetings (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        title TEXT,
+        description TEXT,
+        meeting_type TEXT DEFAULT 'AGM',
+        status TEXT DEFAULT 'SCHEDULED',
+        convened_by TEXT,
+        meeting_date DATE,
+        start_time TEXT,
+        end_time TEXT,
+        location TEXT,
+        agenda_items JSONB,
+        is_online BOOLEAN DEFAULT false,
+        meeting_link TEXT,
+        minutes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".polls (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        meeting_id TEXT,
+        title TEXT,
+        description TEXT,
+        poll_type TEXT DEFAULT 'OPEN',
+        options JSONB,
+        total_votes INTEGER DEFAULT 0,
+        end_date DATE,
+        min_votes_required INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'ACTIVE',
+        created_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".poll_votes (
+        id TEXT PRIMARY KEY,
+        poll_id TEXT,
+        user_id TEXT,
+        option_id TEXT,
+        voted_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getMeetings = (req, res) => {

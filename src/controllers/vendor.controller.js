@@ -3,38 +3,45 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureVendorTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vendors (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      name TEXT,
-      category TEXT,
-      contact_person TEXT,
-      phone TEXT,
-      email TEXT,
-      address TEXT,
-      services TEXT,
-      hourly_rate NUMERIC DEFAULT 0,
-      rating NUMERIC DEFAULT 0,
-      total_ratings INTEGER DEFAULT 0,
-      is_verified BOOLEAN DEFAULT false,
-      is_active BOOLEAN DEFAULT true,
-      created_by TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vendor_reviews (
-      id TEXT PRIMARY KEY,
-      vendor_id TEXT,
-      user_id TEXT,
-      rating INTEGER,
-      review TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  try {
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vendors (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        name TEXT,
+        category TEXT,
+        contact_person TEXT,
+        phone TEXT,
+        email TEXT,
+        address TEXT,
+        services TEXT,
+        hourly_rate NUMERIC DEFAULT 0,
+        rating NUMERIC DEFAULT 0,
+        total_ratings INTEGER DEFAULT 0,
+        is_verified BOOLEAN DEFAULT false,
+        is_active BOOLEAN DEFAULT true,
+        created_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vendor_reviews (
+        id TEXT PRIMARY KEY,
+        vendor_id TEXT,
+        user_id TEXT,
+        rating INTEGER,
+        review TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) {
+      return;
+    }
+    throw err;
+  }
 };
 
 exports.getAll = (req, res) => {
