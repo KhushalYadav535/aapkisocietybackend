@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureMeetingTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.meetings (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".meetings (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       title TEXT,
@@ -26,7 +26,7 @@ const ensureMeetingTables = async (societyId) => {
     )
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.polls (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".polls (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       meeting_id TEXT,
@@ -43,7 +43,7 @@ const ensureMeetingTables = async (societyId) => {
     )
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.poll_votes (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".poll_votes (
       id TEXT PRIMARY KEY,
       poll_id TEXT,
       user_id TEXT,
@@ -60,7 +60,7 @@ exports.getMeetings = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensurePlatformSchema().then(async () => {
-        let query = `SELECT m.*, u.first_name, u.last_name FROM society_${societyId}.meetings m JOIN platform.users u ON u.id = m.convened_by WHERE m.society_id = $1`;
+        let query = `SELECT m.*, u.first_name, u.last_name FROM \"society_${societyId}\".meetings m JOIN platform.users u ON u.id = m.convened_by WHERE m.society_id = $1`;
         const params = [societyId];
         if (status) { query += ` AND m.status = $2`; params.push(status); }
         query += ' ORDER BY m.meeting_date DESC, m.start_time DESC';
@@ -104,7 +104,7 @@ exports.create = (req, res) => {
     if (isPostgresEnabled) {
       return ensurePlatformSchema().then(async () => {
         await pool.query(
-          `INSERT INTO society_${societyId}.meetings (id, society_id, title, description, meeting_type, status, convened_by, meeting_date, start_time, end_time, location, agenda_items, is_online, meeting_link, created_at)
+          `INSERT INTO \"society_${societyId}\".meetings (id, society_id, title, description, meeting_type, status, convened_by, meeting_date, start_time, end_time, location, agenda_items, is_online, meeting_link, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
           [meeting.id, meeting.society_id, meeting.title, meeting.description, meeting.meeting_type, meeting.status, meeting.convened_by, meeting.meeting_date, meeting.start_time, meeting.end_time, meeting.location, meeting.agenda_items, meeting.is_online, meeting.meeting_link, meeting.created_at]
         );
@@ -128,7 +128,7 @@ exports.getById = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
-        const r = await pool.query(`SELECT m.*, u.first_name, u.last_name FROM society_${societyId}.meetings m JOIN platform.users u ON u.id = m.convened_by WHERE m.id = $1`, [id]);
+        const r = await pool.query(`SELECT m.*, u.first_name, u.last_name FROM \"society_${societyId}\".meetings m JOIN platform.users u ON u.id = m.convened_by WHERE m.id = $1`, [id]);
         if (!r.rows[0]) return res.status(404).json({ error: 'Meeting not found' });
         return res.json({ meeting: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to fetch meeting' }));
@@ -161,10 +161,10 @@ exports.updateStatus = (req, res) => {
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
         await pool.query(
-          `UPDATE society_${societyId}.meetings SET status = $1, minutes = COALESCE($2, minutes), updated_at = $3 WHERE id = $4`,
+          `UPDATE \"society_${societyId}\".meetings SET status = $1, minutes = COALESCE($2, minutes), updated_at = $3 WHERE id = $4`,
           [status, minutes, now, id]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.meetings WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".meetings WHERE id = $1`, [id]);
         return res.json({ meeting: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to update meeting' }));
     }
@@ -195,7 +195,7 @@ exports.createPoll = (req, res) => {
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
         await pool.query(
-          `INSERT INTO society_${societyId}.polls (id, society_id, meeting_id, title, description, poll_type, options, total_votes, end_date, min_votes_required, status, created_by, created_at)
+          `INSERT INTO \"society_${societyId}\".polls (id, society_id, meeting_id, title, description, poll_type, options, total_votes, end_date, min_votes_required, status, created_by, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
           [poll.id, poll.society_id, poll.meeting_id, poll.title, poll.description, poll.poll_type, JSON.stringify(poll.options), poll.total_votes, poll.end_date, poll.min_votes_required, poll.status, poll.created_by, poll.created_at]
         );
@@ -222,10 +222,10 @@ exports.vote = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
-        const existing = await pool.query(`SELECT * FROM society_${societyId}.poll_votes WHERE poll_id = $1 AND user_id = $2`, [id, userId]);
+        const existing = await pool.query(`SELECT * FROM \"society_${societyId}\".poll_votes WHERE poll_id = $1 AND user_id = $2`, [id, userId]);
         if (existing.rows.length > 0) return res.status(400).json({ error: 'Already voted' });
 
-        const poll = await pool.query(`SELECT * FROM society_${societyId}.polls WHERE id = $1`, [id]);
+        const poll = await pool.query(`SELECT * FROM \"society_${societyId}\".polls WHERE id = $1`, [id]);
         if (!poll.rows[0]) return res.status(404).json({ error: 'Poll not found' });
         if (poll.rows[0].status !== 'ACTIVE') return res.status(400).json({ error: 'Poll is not active' });
 
@@ -235,10 +235,10 @@ exports.vote = (req, res) => {
           return o;
         });
 
-        await pool.query(`UPDATE society_${societyId}.polls SET options = $1, total_votes = total_votes + 1 WHERE id = $2`, [JSON.stringify(options), id]);
-        await pool.query(`INSERT INTO society_${societyId}.poll_votes (id, poll_id, user_id, option_id, voted_at) VALUES ($1, $2, $3, $4, $5)`, [uuidv4(), id, userId, option_id, now]);
+        await pool.query(`UPDATE \"society_${societyId}\".polls SET options = $1, total_votes = total_votes + 1 WHERE id = $2`, [JSON.stringify(options), id]);
+        await pool.query(`INSERT INTO \"society_${societyId}\".poll_votes (id, poll_id, user_id, option_id, voted_at) VALUES ($1, $2, $3, $4, $5)`, [uuidv4(), id, userId, option_id, now]);
 
-        const updated = await pool.query(`SELECT * FROM society_${societyId}.polls WHERE id = $1`, [id]);
+        const updated = await pool.query(`SELECT * FROM \"society_${societyId}\".polls WHERE id = $1`, [id]);
         return res.json({ poll: updated.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to vote' }));
     }
@@ -277,7 +277,7 @@ exports.getPolls = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
-        let query = `SELECT * FROM society_${societyId}.polls WHERE society_id = $1`;
+        let query = `SELECT * FROM \"society_${societyId}\".polls WHERE society_id = $1`;
         const params = [societyId];
         let idx = 2;
         if (meeting_id) { query += ` AND meeting_id = $${idx++}`; params.push(meeting_id); }
@@ -309,8 +309,8 @@ exports.closePoll = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
-        await pool.query(`UPDATE society_${societyId}.polls SET status = 'CLOSED', updated_at = $1 WHERE id = $2`, [now, id]);
-        const r = await pool.query(`SELECT * FROM society_${societyId}.polls WHERE id = $1`, [id]);
+        await pool.query(`UPDATE \"society_${societyId}\".polls SET status = 'CLOSED', updated_at = $1 WHERE id = $2`, [now, id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".polls WHERE id = $1`, [id]);
         return res.json({ poll: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to close poll' }));
     }

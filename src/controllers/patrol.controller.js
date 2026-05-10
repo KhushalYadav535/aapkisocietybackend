@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled } = require('../config/postgres');
 
 const ensurePatrolTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.patrol_checkpoints (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".patrol_checkpoints (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       location_name TEXT NOT NULL,
@@ -17,7 +17,7 @@ const ensurePatrolTables = async (societyId) => {
     )
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.patrol_logs (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".patrol_logs (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       checkpoint_id TEXT,
@@ -37,7 +37,7 @@ exports.getCheckpoints = async (req, res) => {
     if (isPostgresEnabled) {
       await ensurePatrolTables(societyId);
       const r = await pool.query(
-        `SELECT * FROM society_${societyId}.patrol_checkpoints WHERE society_id=$1 AND is_active=1 ORDER BY location_name`,
+        `SELECT * FROM \"society_${societyId}\".patrol_checkpoints WHERE society_id=$1 AND is_active=1 ORDER BY location_name`,
         [societyId]
       );
       return res.json({ checkpoints: r.rows });
@@ -66,7 +66,7 @@ exports.createCheckpoint = async (req, res) => {
     if (isPostgresEnabled) {
       await ensurePatrolTables(societyId);
       await pool.query(
-        `INSERT INTO society_${societyId}.patrol_checkpoints (id,society_id,location_name,qr_code,floor,area,is_active,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        `INSERT INTO \"society_${societyId}\".patrol_checkpoints (id,society_id,location_name,qr_code,floor,area,is_active,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [id, societyId, location_name, qr_code, floor || null, area || null, 1, now]
       );
       return res.status(201).json({ checkpoint });
@@ -90,7 +90,7 @@ exports.deleteCheckpoint = async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     if (isPostgresEnabled) {
       await ensurePatrolTables(societyId);
-      await pool.query(`UPDATE society_${societyId}.patrol_checkpoints SET is_active=0 WHERE id=$1`, [id]);
+      await pool.query(`UPDATE \"society_${societyId}\".patrol_checkpoints SET is_active=0 WHERE id=$1`, [id]);
       return res.json({ message: 'Checkpoint deactivated' });
     }
     const db = getDb();
@@ -112,7 +112,7 @@ exports.scan = async (req, res) => {
     if (isPostgresEnabled) {
       await ensurePatrolTables(societyId);
       const cpRes = await pool.query(
-        `SELECT * FROM society_${societyId}.patrol_checkpoints WHERE qr_code=$1 AND society_id=$2 AND is_active=1`,
+        `SELECT * FROM \"society_${societyId}\".patrol_checkpoints WHERE qr_code=$1 AND society_id=$2 AND is_active=1`,
         [qr_code, societyId]
       );
       if (cpRes.rows.length === 0) return res.status(404).json({ error: 'Invalid QR code or checkpoint not found' });
@@ -120,7 +120,7 @@ exports.scan = async (req, res) => {
 
       const logId = uuidv4();
       await pool.query(
-        `INSERT INTO society_${societyId}.patrol_logs (id,society_id,checkpoint_id,checkpoint_name,scanned_by,scanned_at,notes,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        `INSERT INTO \"society_${societyId}\".patrol_logs (id,society_id,checkpoint_id,checkpoint_name,scanned_by,scanned_at,notes,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [logId, societyId, checkpoint.id, checkpoint.location_name, req.user.id, now, notes || null, now]
       );
       return res.json({ success: true, checkpoint_name: checkpoint.location_name, scanned_at: now });
@@ -150,7 +150,7 @@ exports.getLogs = async (req, res) => {
       await ensurePatrolTables(societyId);
       let q = `
         SELECT pl.*, u.first_name, u.last_name
-        FROM society_${societyId}.patrol_logs pl
+        FROM \"society_${societyId}\".patrol_logs pl
         LEFT JOIN platform.users u ON u.id = pl.scanned_by
         WHERE pl.society_id=$1`;
       const params = [societyId]; let idx = 2;
@@ -186,8 +186,8 @@ exports.getSummary = async (req, res) => {
       await ensurePatrolTables(societyId);
       const r = await pool.query(`
         SELECT pc.location_name, pc.area, COUNT(pl.id)::int AS scan_count, MAX(pl.scanned_at) AS last_scanned
-        FROM society_${societyId}.patrol_checkpoints pc
-        LEFT JOIN society_${societyId}.patrol_logs pl ON pl.checkpoint_id=pc.id AND DATE(pl.scanned_at)=CURRENT_DATE
+        FROM \"society_${societyId}\".patrol_checkpoints pc
+        LEFT JOIN \"society_${societyId}\".patrol_logs pl ON pl.checkpoint_id=pc.id AND DATE(pl.scanned_at)=CURRENT_DATE
         WHERE pc.society_id=$1 AND pc.is_active=1
         GROUP BY pc.id, pc.location_name, pc.area
         ORDER BY pc.location_name`, [societyId]

@@ -6,9 +6,9 @@ const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/pos
 const STATUS = { PENDING: 'PENDING', APPROVED: 'APPROVED', REJECTED: 'REJECTED', EXPIRED: 'EXPIRED' };
 
 const ensureTenantTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.tenants (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".tenants (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       flat_id TEXT,
@@ -36,7 +36,7 @@ exports.getAll = (req, res) => {
     if (isPostgresEnabled) {
       return ensureTenantTables(societyId).then(async () => {
         let query = `SELECT t.*, u.flat_number, u.wing, o.first_name as owner_name, o.last_name as owner_last_name
-          FROM society_${societyId}.tenants t
+          FROM \"society_${societyId}\".tenants t
           JOIN platform.users u ON u.id = t.flat_id
           JOIN platform.users o ON o.id = t.owner_id
           WHERE t.society_id = $1`;
@@ -85,7 +85,7 @@ exports.create = (req, res) => {
         const hashed = await bcrypt.hash(tempPassword, 10);
 
         await pool.query(
-          `INSERT INTO society_${societyId}.tenants (id, society_id, flat_id, owner_id, tenant_name, tenant_email, tenant_phone, lease_start, lease_end, rent_amount, status, created_at)
+          `INSERT INTO \"society_${societyId}\".tenants (id, society_id, flat_id, owner_id, tenant_name, tenant_email, tenant_phone, lease_start, lease_end, rent_amount, status, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
           [id, societyId, flat_id, owner_id || req.user.id, tenant_name, tenant_email, tenant_phone, lease_start, lease_end, rent_amount, STATUS.PENDING, now]
         );
@@ -98,7 +98,7 @@ exports.create = (req, res) => {
           );
         }
 
-        const r = await pool.query(`SELECT * FROM society_${societyId}.tenants WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".tenants WHERE id = $1`, [id]);
         return res.status(201).json({ tenant: r.rows[0], tempPassword: tenant_email ? tempPassword : null });
       }).catch(() => res.status(500).json({ error: 'Failed to create tenant' }));
     }
@@ -141,8 +141,8 @@ exports.approve = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureTenantTables(societyId).then(async () => {
-        await pool.query(`UPDATE society_${societyId}.tenants SET status = $1, updated_at = $2 WHERE id = $3`, [STATUS.APPROVED, now, id]);
-        const r = await pool.query(`SELECT * FROM society_${societyId}.tenants WHERE id = $1`, [id]);
+        await pool.query(`UPDATE \"society_${societyId}\".tenants SET status = $1, updated_at = $2 WHERE id = $3`, [STATUS.APPROVED, now, id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".tenants WHERE id = $1`, [id]);
         return res.json({ tenant: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to approve tenant' }));
     }
@@ -166,7 +166,7 @@ exports.reject = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureTenantTables(societyId).then(async () => {
-        await pool.query(`UPDATE society_${societyId}.tenants SET status = $1, rejection_reason = $2, updated_at = $3 WHERE id = $4`, [STATUS.REJECTED, reason, now, id]);
+        await pool.query(`UPDATE \"society_${societyId}\".tenants SET status = $1, rejection_reason = $2, updated_at = $3 WHERE id = $4`, [STATUS.REJECTED, reason, now, id]);
         return res.json({ message: 'Tenant rejected' });
       }).catch(() => res.status(500).json({ error: 'Failed to reject tenant' }));
     }
@@ -197,10 +197,10 @@ exports.extendLease = (req, res) => {
     if (isPostgresEnabled) {
       return ensureTenantTables(societyId).then(async () => {
         await pool.query(
-          `UPDATE society_${societyId}.tenants SET lease_end = $1, rent_amount = COALESCE($2, rent_amount), updated_at = $3 WHERE id = $4`,
+          `UPDATE \"society_${societyId}\".tenants SET lease_end = $1, rent_amount = COALESCE($2, rent_amount), updated_at = $3 WHERE id = $4`,
           [lease_end, rent_amount, now, id]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.tenants WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".tenants WHERE id = $1`, [id]);
         return res.json({ tenant: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to extend lease' }));
     }
@@ -225,7 +225,7 @@ exports.terminate = (req, res) => {
     if (isPostgresEnabled) {
       return ensureTenantTables(societyId).then(async () => {
         await pool.query(
-          `UPDATE society_${societyId}.tenants SET status = $1, termination_reason = $2, lease_end = $3, updated_at = $4 WHERE id = $5`,
+          `UPDATE \"society_${societyId}\".tenants SET status = $1, termination_reason = $2, lease_end = $3, updated_at = $4 WHERE id = $5`,
           [STATUS.EXPIRED, reason, now.split('T')[0], now, id]
         );
         return res.json({ message: 'Tenant terminated' });
@@ -251,7 +251,7 @@ exports.getMyTenants = (req, res) => {
     if (isPostgresEnabled) {
       return ensureTenantTables(societyId).then(async () => {
         const r = await pool.query(
-          `SELECT * FROM society_${societyId}.tenants WHERE owner_id = $1 ORDER BY created_at DESC`,
+          `SELECT * FROM \"society_${societyId}\".tenants WHERE owner_id = $1 ORDER BY created_at DESC`,
           [userId]
         );
         return res.json({ tenants: r.rows });

@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled } = require('../config/postgres');
 
 const ensureSosTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.sos_alerts (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".sos_alerts (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       raised_by TEXT,
@@ -43,7 +43,7 @@ exports.raise = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureSosTables(societyId);
       await pool.query(
-        `INSERT INTO society_${societyId}.sos_alerts
+        `INSERT INTO \"society_${societyId}\".sos_alerts
          (id,society_id,raised_by,flat_number,wing,alert_type,description,status,responded_by,responded_at,resolved_at,created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [alert.id, alert.society_id, alert.raised_by, alert.flat_number, alert.wing,
@@ -74,7 +74,7 @@ exports.getAll = async (req, res) => {
       let q = `
         SELECT s.*, u.first_name, u.last_name, u.phone,
                r.first_name AS responder_first_name, r.last_name AS responder_last_name
-        FROM society_${societyId}.sos_alerts s
+        FROM \"society_${societyId}\".sos_alerts s
         LEFT JOIN platform.users u ON u.id = s.raised_by
         LEFT JOIN platform.users r ON r.id = s.responded_by
         WHERE s.society_id = $1`;
@@ -109,10 +109,10 @@ exports.respond = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureSosTables(societyId);
       await pool.query(
-        `UPDATE society_${societyId}.sos_alerts SET status='RESPONDED', responded_by=$1, responded_at=$2 WHERE id=$3`,
+        `UPDATE \"society_${societyId}\".sos_alerts SET status='RESPONDED', responded_by=$1, responded_at=$2 WHERE id=$3`,
         [req.user.id, now, id]
       );
-      const r = await pool.query(`SELECT * FROM society_${societyId}.sos_alerts WHERE id=$1`, [id]);
+      const r = await pool.query(`SELECT * FROM \"society_${societyId}\".sos_alerts WHERE id=$1`, [id]);
       return res.json({ alert: r.rows[0] });
     }
 
@@ -134,10 +134,10 @@ exports.resolve = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureSosTables(societyId);
       await pool.query(
-        `UPDATE society_${societyId}.sos_alerts SET status='RESOLVED', resolved_at=$1 WHERE id=$2`,
+        `UPDATE \"society_${societyId}\".sos_alerts SET status='RESOLVED', resolved_at=$1 WHERE id=$2`,
         [now, id]
       );
-      const r = await pool.query(`SELECT * FROM society_${societyId}.sos_alerts WHERE id=$1`, [id]);
+      const r = await pool.query(`SELECT * FROM \"society_${societyId}\".sos_alerts WHERE id=$1`, [id]);
       return res.json({ alert: r.rows[0] });
     }
 
@@ -156,7 +156,7 @@ exports.activeCount = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureSosTables(societyId);
       const r = await pool.query(
-        `SELECT COUNT(*)::int AS count FROM society_${societyId}.sos_alerts WHERE society_id=$1 AND status='ACTIVE'`,
+        `SELECT COUNT(*)::int AS count FROM \"society_${societyId}\".sos_alerts WHERE society_id=$1 AND status='ACTIVE'`,
         [societyId]
       );
       return res.json({ count: r.rows[0]?.count || 0 });

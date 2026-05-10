@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled } = require('../config/postgres');
 
 const ensureAssetTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.assets (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".assets (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       asset_name TEXT NOT NULL,
@@ -31,7 +31,7 @@ const ensureAssetTables = async (societyId) => {
     )
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.asset_service_logs (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".asset_service_logs (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       asset_id TEXT,
@@ -54,7 +54,7 @@ exports.getAll = async (req, res) => {
     const { category, status, expiring_soon } = req.query;
     if (isPostgresEnabled) {
       await ensureAssetTables(societyId);
-      let q = `SELECT * FROM society_${societyId}.assets WHERE society_id=$1`;
+      let q = `SELECT * FROM \"society_${societyId}\".assets WHERE society_id=$1`;
       const params = [societyId]; let idx = 2;
       if (category) { q += ` AND category=$${idx++}`; params.push(category); }
       if (status) { q += ` AND status=$${idx++}`; params.push(status); }
@@ -87,13 +87,13 @@ exports.getByQr = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureAssetTables(societyId);
       const r = await pool.query(
-        `SELECT * FROM society_${societyId}.assets WHERE qr_code=$1 AND society_id=$2`,
+        `SELECT * FROM \"society_${societyId}\".assets WHERE qr_code=$1 AND society_id=$2`,
         [qrCode, societyId]
       );
       if (r.rows.length === 0) return res.status(404).json({ error: 'Asset not found' });
       // also fetch service logs
       const logs = await pool.query(
-        `SELECT * FROM society_${societyId}.asset_service_logs WHERE asset_id=$1 ORDER BY service_date DESC LIMIT 10`,
+        `SELECT * FROM \"society_${societyId}\".asset_service_logs WHERE asset_id=$1 ORDER BY service_date DESC LIMIT 10`,
         [r.rows[0].id]
       );
       return res.json({ asset: r.rows[0], service_logs: logs.rows });
@@ -126,7 +126,7 @@ exports.create = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureAssetTables(societyId);
       await pool.query(
-        `INSERT INTO society_${societyId}.assets (id,society_id,asset_name,asset_code,category,location,make_model,serial_number,purchase_date,purchase_amount,warranty_expiry,amc_vendor,amc_expiry,amc_amount,last_serviced,next_service_due,status,notes,qr_code,created_by,created_at,updated_at)
+        `INSERT INTO \"society_${societyId}\".assets (id,society_id,asset_name,asset_code,category,location,make_model,serial_number,purchase_date,purchase_amount,warranty_expiry,amc_vendor,amc_expiry,amc_amount,last_serviced,next_service_due,status,notes,qr_code,created_by,created_at,updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
         [id, societyId, asset_name, asset_code, category || null, location || null, make_model || null, serial_number || null, purchase_date || null, purchase_amount || null, warranty_expiry || null, amc_vendor || null, amc_expiry || null, amc_amount || null, last_serviced || null, next_service_due || null, status || 'ACTIVE', notes || null, qr_code, req.user.id, now, now]
       );
@@ -161,8 +161,8 @@ exports.update = async (req, res) => {
       const values = keys.map(k => fields[k]);
       values.push(now); const setFull = `${setClauses}, updated_at=$${values.length}`;
       values.push(id);
-      await pool.query(`UPDATE society_${societyId}.assets SET ${setFull} WHERE id=$${values.length}`, values);
-      const r = await pool.query(`SELECT * FROM society_${societyId}.assets WHERE id=$1`, [id]);
+      await pool.query(`UPDATE \"society_${societyId}\".assets SET ${setFull} WHERE id=$${values.length}`, values);
+      const r = await pool.query(`SELECT * FROM \"society_${societyId}\".assets WHERE id=$1`, [id]);
       return res.json({ asset: r.rows[0] });
     }
 
@@ -191,13 +191,13 @@ exports.addServiceLog = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureAssetTables(societyId);
       await pool.query(
-        `INSERT INTO society_${societyId}.asset_service_logs (id,society_id,asset_id,service_type,service_date,vendor_name,cost,description,next_due,logged_by,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        `INSERT INTO \"society_${societyId}\".asset_service_logs (id,society_id,asset_id,service_type,service_date,vendor_name,cost,description,next_due,logged_by,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [logId, societyId, assetId, service_type, service_date, vendor_name || null, cost || null, description || null, next_due || null, req.user.id, now]
       );
       // Update asset's last_serviced and next_service_due
       if (service_date) {
         await pool.query(
-          `UPDATE society_${societyId}.assets SET last_serviced=$1, next_service_due=$2, updated_at=$3 WHERE id=$4`,
+          `UPDATE \"society_${societyId}\".assets SET last_serviced=$1, next_service_due=$2, updated_at=$3 WHERE id=$4`,
           [service_date, next_due || null, now, assetId]
         );
       }
@@ -222,7 +222,7 @@ exports.getServiceLogs = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureAssetTables(societyId);
       const r = await pool.query(
-        `SELECT sl.*, u.first_name, u.last_name FROM society_${societyId}.asset_service_logs sl LEFT JOIN platform.users u ON u.id = sl.logged_by WHERE sl.asset_id=$1 ORDER BY sl.service_date DESC`,
+        `SELECT sl.*, u.first_name, u.last_name FROM \"society_${societyId}\".asset_service_logs sl LEFT JOIN platform.users u ON u.id = sl.logged_by WHERE sl.asset_id=$1 ORDER BY sl.service_date DESC`,
         [assetId]
       );
       return res.json({ logs: r.rows });
@@ -248,7 +248,7 @@ exports.getAmcAlerts = async (req, res) => {
                WHEN amc_expiry <= CURRENT_DATE + INTERVAL '30 days' THEN 'CRITICAL'
                WHEN amc_expiry <= CURRENT_DATE + INTERVAL '60 days' THEN 'WARNING'
                ELSE 'OK' END AS amc_status
-        FROM society_${societyId}.assets
+        FROM \"society_${societyId}\".assets
         WHERE society_id=$1 AND amc_expiry IS NOT NULL AND amc_expiry <= CURRENT_DATE + INTERVAL '60 days'
         ORDER BY amc_expiry`, [societyId]
       );
@@ -278,7 +278,7 @@ exports.remove = async (req, res) => {
     const societyId = req.user.society_id;
     if (isPostgresEnabled) {
       await ensureAssetTables(societyId);
-      await pool.query(`UPDATE society_${societyId}.assets SET status='DECOMMISSIONED' WHERE id=$1`, [id]);
+      await pool.query(`UPDATE \"society_${societyId}\".assets SET status='DECOMMISSIONED' WHERE id=$1`, [id]);
       return res.json({ message: 'Asset decommissioned' });
     }
     const db = getDb();

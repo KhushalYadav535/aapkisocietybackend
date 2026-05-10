@@ -5,9 +5,9 @@ const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/pos
 const DOC_CATEGORIES = ['AGREEMENT', 'RECEIPT', 'COMPLIANCE', 'MAINTENANCE', 'INSURANCE', 'PERMIT', 'OTHER'];
 
 const ensureDocumentTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.documents (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".documents (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       title TEXT,
@@ -32,7 +32,7 @@ exports.getAll = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensurePlatformSchema().then(async () => {
-        let query = `SELECT * FROM society_${societyId}.documents WHERE 1=1`;
+        let query = `SELECT * FROM \"society_${societyId}\".documents WHERE 1=1`;
         const params = [];
         let idx = 1;
 
@@ -67,7 +67,7 @@ exports.getById = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureDocumentTables(societyId).then(async () => {
-        const r = await pool.query(`SELECT * FROM society_${societyId}.documents WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".documents WHERE id = $1`, [id]);
         if (!r.rows[0]) return res.status(404).json({ error: 'Document not found' });
         return res.json({ document: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to fetch document' }));
@@ -109,7 +109,7 @@ exports.upload = (req, res) => {
     if (isPostgresEnabled) {
       return ensureDocumentTables(societyId).then(async () => {
         await pool.query(
-          `INSERT INTO society_${societyId}.documents (id, society_id, title, description, category, flat_id, file_name, file_path, file_size, file_type, uploaded_by, created_at)
+          `INSERT INTO \"society_${societyId}\".documents (id, society_id, title, description, category, flat_id, file_name, file_path, file_size, file_type, uploaded_by, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
           [docData.id, docData.society_id, docData.title, docData.description, docData.category, docData.flat_id, docData.file_name, docData.file_path, docData.file_size, docData.file_type, docData.uploaded_by, docData.created_at]
         );
@@ -136,10 +136,10 @@ exports.update = (req, res) => {
     if (isPostgresEnabled) {
       return ensureDocumentTables(societyId).then(async () => {
         await pool.query(
-          `UPDATE society_${societyId}.documents SET title = COALESCE($1, title), description = COALESCE($2, description), category = COALESCE($3, category), flat_id = COALESCE($4, flat_id), updated_at = $5 WHERE id = $6`,
+          `UPDATE \"society_${societyId}\".documents SET title = COALESCE($1, title), description = COALESCE($2, description), category = COALESCE($3, category), flat_id = COALESCE($4, flat_id), updated_at = $5 WHERE id = $6`,
           [title, description, category, flat_id, now, id]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.documents WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".documents WHERE id = $1`, [id]);
         return res.json({ document: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to update document' }));
     }
@@ -166,7 +166,7 @@ exports.delete = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureDocumentTables(societyId).then(async () => {
-        await pool.query(`DELETE FROM society_${societyId}.documents WHERE id = $1`, [id]);
+        await pool.query(`DELETE FROM \"society_${societyId}\".documents WHERE id = $1`, [id]);
         return res.json({ message: 'Document deleted' });
       }).catch(() => res.status(500).json({ error: 'Failed to delete document' }));
     }

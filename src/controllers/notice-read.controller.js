@@ -12,15 +12,15 @@ exports.markRead = (req, res) => {
     if (isPostgresEnabled) {
       return ensurePlatformSchema().then(async () => {
         const existing = await pool.query(
-          `SELECT * FROM society_${societyId}.notice_reads WHERE notice_id = $1 AND user_id = $2`,
+          `SELECT * FROM \"society_${societyId}\".notice_reads WHERE notice_id = $1 AND user_id = $2`,
           [notice_id, userId]
         );
         if (existing.rows.length > 0) {
-          await pool.query(`UPDATE society_${societyId}.notice_reads SET read_at = $1 WHERE notice_id = $2 AND user_id = $3`, [now, notice_id, userId]);
+          await pool.query(`UPDATE \"society_${societyId}\".notice_reads SET read_at = $1 WHERE notice_id = $2 AND user_id = $3`, [now, notice_id, userId]);
         } else {
           const id = uuidv4();
           await pool.query(
-            `INSERT INTO society_${societyId}.notice_reads (id, notice_id, user_id, read_at) VALUES ($1, $2, $3, $4)`,
+            `INSERT INTO \"society_${societyId}\".notice_reads (id, notice_id, user_id, read_at) VALUES ($1, $2, $3, $4)`,
             [id, notice_id, userId, now]
           );
         }
@@ -54,7 +54,7 @@ exports.getReadReceipts = (req, res) => {
       return ensurePlatformSchema().then(async () => {
         const r = await pool.query(`
           SELECT nr.*, u.first_name, u.last_name, u.flat_number, u.wing
-          FROM society_${societyId}.notice_reads nr
+          FROM \"society_${societyId}\".notice_reads nr
           JOIN platform.users u ON u.id = nr.user_id
           WHERE nr.notice_id = $1
           ORDER BY nr.read_at DESC
@@ -87,9 +87,9 @@ exports.getMyUnread = (req, res) => {
       return ensurePlatformSchema().then(async () => {
         const notices = await pool.query(`
           SELECT n.id, n.title, n.category, n.priority, n.publish_date
-          FROM society_${societyId}.notices n
+          FROM \"society_${societyId}\".notices n
           WHERE n.is_published = 1
-          AND n.id NOT IN (SELECT notice_id FROM society_${societyId}.notice_reads WHERE user_id = $1)
+          AND n.id NOT IN (SELECT notice_id FROM \"society_${societyId}\".notice_reads WHERE user_id = $1)
           ORDER BY n.publish_date DESC
           LIMIT 10
         `, [userId]);

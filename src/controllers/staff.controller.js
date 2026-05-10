@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureStaffTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.staff (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".staff (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       name TEXT NOT NULL,
@@ -21,7 +21,7 @@ const ensureStaffTables = async (societyId) => {
     )
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.staff_attendance (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".staff_attendance (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       staff_id TEXT,
@@ -43,7 +43,7 @@ exports.getAll = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureStaffTables(societyId).then(async () => {
-        let query = `SELECT sa.*, s.name as staff_name, s.staff_type FROM society_${societyId}.staff_attendance sa LEFT JOIN society_${societyId}.staff s ON sa.staff_id = s.id WHERE 1=1`;
+        let query = `SELECT sa.*, s.name as staff_name, s.staff_type FROM \"society_${societyId}\".staff_attendance sa LEFT JOIN \"society_${societyId}\".staff s ON sa.staff_id = s.id WHERE 1=1`;
         const params = [];
         let idx = 1;
 
@@ -78,7 +78,7 @@ exports.getStaff = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureStaffTables(societyId).then(async () => {
-        const r = await pool.query(`SELECT * FROM society_${societyId}.staff WHERE society_id = $1 AND is_active = 1 ORDER BY name`, [societyId]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".staff WHERE society_id = $1 AND is_active = 1 ORDER BY name`, [societyId]);
         return res.json({ staff: r.rows });
       }).catch((err) => { console.error('Get staff error:', err.message); return res.status(500).json({ error: 'Failed to fetch staff' }); });
     }
@@ -101,11 +101,11 @@ exports.createStaff = (req, res) => {
       return ensureStaffTables(societyId).then(async () => {
         const id = uuidv4();
         await pool.query(
-          `INSERT INTO society_${societyId}.staff (id, society_id, name, phone, staff_type, address, aadhaar_number, salary, duty_timing, is_active, created_at)
+          `INSERT INTO \"society_${societyId}\".staff (id, society_id, name, phone, staff_type, address, aadhaar_number, salary, duty_timing, is_active, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)`,
           [id, societyId, name, phone, staff_type, address, aadhaar_number, salary, duty_timing, now]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.staff WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".staff WHERE id = $1`, [id]);
         return res.status(201).json({ staff: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to create staff' }));
     }
@@ -134,7 +134,7 @@ exports.checkIn = (req, res) => {
     if (isPostgresEnabled) {
       return ensureStaffTables(societyId).then(async () => {
         const existing = await pool.query(
-          `SELECT * FROM society_${societyId}.staff_attendance WHERE staff_id = $1 AND DATE(attendance_date) = CURRENT_DATE`,
+          `SELECT * FROM \"society_${societyId}\".staff_attendance WHERE staff_id = $1 AND DATE(attendance_date) = CURRENT_DATE`,
           [staff_id]
         );
         if (existing.rows.length > 0) {
@@ -142,11 +142,11 @@ exports.checkIn = (req, res) => {
         }
         const id = uuidv4();
         await pool.query(
-          `INSERT INTO society_${societyId}.staff_attendance (id, society_id, staff_id, attendance_date, check_in, status)
+          `INSERT INTO \"society_${societyId}\".staff_attendance (id, society_id, staff_id, attendance_date, check_in, status)
            VALUES ($1, $2, $3, $4, $5, 'PRESENT')`,
           [id, societyId, staff_id, now, now]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.staff_attendance WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".staff_attendance WHERE id = $1`, [id]);
         return res.status(201).json({ record: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Check-in failed' }));
     }
@@ -179,13 +179,13 @@ exports.checkOut = (req, res) => {
     if (isPostgresEnabled) {
       return ensureStaffTables(societyId).then(async () => {
         await pool.query(
-          `UPDATE society_${societyId}.staff_attendance
+          `UPDATE \"society_${societyId}\".staff_attendance
            SET check_out = $1, notes = COALESCE($2, notes)
            WHERE staff_id = $3 AND DATE(attendance_date) = CURRENT_DATE AND check_out IS NULL`,
           [now, notes, staff_id]
         );
         const r = await pool.query(
-          `SELECT * FROM society_${societyId}.staff_attendance WHERE staff_id = $1 AND DATE(attendance_date) = CURRENT_DATE`,
+          `SELECT * FROM \"society_${societyId}\".staff_attendance WHERE staff_id = $1 AND DATE(attendance_date) = CURRENT_DATE`,
           [staff_id]
         );
         return res.json({ record: r.rows[0] });
@@ -216,11 +216,11 @@ exports.markAbsent = (req, res) => {
       return ensureStaffTables(societyId).then(async () => {
         const id = uuidv4();
         await pool.query(
-          `INSERT INTO society_${societyId}.staff_attendance (id, society_id, staff_id, attendance_date, status, notes)
+          `INSERT INTO \"society_${societyId}\".staff_attendance (id, society_id, staff_id, attendance_date, status, notes)
            VALUES ($1, $2, $3, $4, 'ABSENT', $5)`,
           [id, societyId, staff_id, date || now.split('T')[0], reason]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.staff_attendance WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".staff_attendance WHERE id = $1`, [id]);
         return res.status(201).json({ record: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to mark absent' }));
     }
@@ -252,7 +252,7 @@ exports.getSummary = (req, res) => {
             COUNT(*) FILTER (WHERE status = 'PRESENT') as present,
             COUNT(*) FILTER (WHERE status = 'ABSENT') as absent,
             COUNT(*) as total
-          FROM society_${societyId}.staff_attendance
+          FROM \"society_${societyId}\".staff_attendance
           WHERE 1=1
           ${start_date ? `AND attendance_date >= '${start_date}'` : ''}
           ${end_date ? `AND attendance_date <= '${end_date}'` : ''}
@@ -260,7 +260,7 @@ exports.getSummary = (req, res) => {
         `);
 
         const staffCountRes = await pool.query(
-          `SELECT staff_type, COUNT(*) as count FROM society_${societyId}.staff WHERE is_active = 1 GROUP BY staff_type`
+          `SELECT staff_type, COUNT(*) as count FROM \"society_${societyId}\".staff WHERE is_active = 1 GROUP BY staff_type`
         );
 
         return res.json({ summary: summaryRes.rows, staffCount: staffCountRes.rows });
@@ -297,7 +297,7 @@ exports.deactivate = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureStaffTables(societyId).then(async () => {
-        await pool.query(`UPDATE society_${societyId}.staff SET is_active = 0 WHERE id = $1`, [req.params.id]);
+        await pool.query(`UPDATE \"society_${societyId}\".staff SET is_active = 0 WHERE id = $1`, [req.params.id]);
         return res.json({ message: 'Staff deactivated' });
       }).catch(() => res.status(500).json({ error: 'Failed to deactivate' }));
     }

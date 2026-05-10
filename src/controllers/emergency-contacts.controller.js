@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled } = require('../config/postgres');
 
 const ensureContactTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.emergency_contacts (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".emergency_contacts (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       category TEXT NOT NULL,
@@ -29,7 +29,7 @@ exports.getAll = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureContactTables(societyId);
       const r = await pool.query(
-        `SELECT * FROM society_${societyId}.emergency_contacts WHERE society_id=$1 AND is_active=1 ORDER BY display_order, category, name`,
+        `SELECT * FROM \"society_${societyId}\".emergency_contacts WHERE society_id=$1 AND is_active=1 ORDER BY display_order, category, name`,
         [societyId]
       );
       return res.json({ contacts: r.rows });
@@ -57,7 +57,7 @@ exports.create = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureContactTables(societyId);
       await pool.query(
-        `INSERT INTO society_${societyId}.emergency_contacts (id,society_id,category,name,phone,alternate_phone,notes,display_order,is_active,created_by,created_at,updated_at)
+        `INSERT INTO \"society_${societyId}\".emergency_contacts (id,society_id,category,name,phone,alternate_phone,notes,display_order,is_active,created_by,created_at,updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [id, societyId, category, name, phone, alternate_phone || null, notes || null, display_order || 0, 1, req.user.id, now, now]
       );
@@ -87,10 +87,10 @@ exports.update = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureContactTables(societyId);
       await pool.query(
-        `UPDATE society_${societyId}.emergency_contacts SET category=$1,name=$2,phone=$3,alternate_phone=$4,notes=$5,display_order=$6,updated_at=$7 WHERE id=$8`,
+        `UPDATE \"society_${societyId}\".emergency_contacts SET category=$1,name=$2,phone=$3,alternate_phone=$4,notes=$5,display_order=$6,updated_at=$7 WHERE id=$8`,
         [category, name, phone, alternate_phone || null, notes || null, display_order || 0, now, id]
       );
-      const r = await pool.query(`SELECT * FROM society_${societyId}.emergency_contacts WHERE id=$1`, [id]);
+      const r = await pool.query(`SELECT * FROM \"society_${societyId}\".emergency_contacts WHERE id=$1`, [id]);
       return res.json({ contact: r.rows[0] });
     }
 
@@ -112,7 +112,7 @@ exports.remove = async (req, res) => {
     const societyId = req.user.society_id;
     if (isPostgresEnabled) {
       await ensureContactTables(societyId);
-      await pool.query(`UPDATE society_${societyId}.emergency_contacts SET is_active=0 WHERE id=$1`, [id]);
+      await pool.query(`UPDATE \"society_${societyId}\".emergency_contacts SET is_active=0 WHERE id=$1`, [id]);
       return res.json({ message: 'Contact removed' });
     }
     const db = getDb();

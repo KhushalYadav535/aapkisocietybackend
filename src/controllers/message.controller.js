@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureMessageTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.messages (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT,
       sender_id TEXT,
@@ -31,11 +31,11 @@ exports.getConversations = (req, res) => {
             CASE WHEN c.sender_id = $1 THEN r.last_name ELSE s.last_name END as other_last_name,
             CASE WHEN c.sender_id = $1 THEN r.flat_number ELSE s.flat_number END as other_flat,
             CASE WHEN c.sender_id = $1 THEN r.wing ELSE s.wing END as other_wing
-          FROM society_${societyId}.messages c
+          FROM \"society_${societyId}\".messages c
           JOIN platform.users s ON s.id = c.sender_id
           JOIN platform.users r ON r.id = c.receiver_id
           WHERE c.conversation_id IN (
-            SELECT conversation_id FROM society_${societyId}.messages
+            SELECT conversation_id FROM \"society_${societyId}\".messages
             WHERE sender_id = $1 OR receiver_id = $1
           )
           ORDER BY c.conversation_id, c.created_at DESC
@@ -88,7 +88,7 @@ exports.getMessages = (req, res) => {
       return ensureMessageTables(societyId).then(async () => {
         const r = await pool.query(`
           SELECT m.*, s.first_name as sender_name, s.last_name as sender_last_name, s.flat_number as sender_flat, s.wing as sender_wing
-          FROM society_${societyId}.messages m
+          FROM \"society_${societyId}\".messages m
           JOIN platform.users s ON s.id = m.sender_id
           WHERE m.conversation_id = $1
           ORDER BY m.created_at DESC
@@ -96,7 +96,7 @@ exports.getMessages = (req, res) => {
         `, [conversationId, limit, offset]);
 
         await pool.query(`
-          UPDATE society_${societyId}.messages SET read_at = NOW()
+          UPDATE \"society_${societyId}\".messages SET read_at = NOW()
           WHERE conversation_id = $1 AND receiver_id = $2 AND read_at IS NULL
         `, [conversationId, userId]);
 
@@ -147,7 +147,7 @@ exports.send = (req, res) => {
     if (isPostgresEnabled) {
       return ensureMessageTables(societyId).then(async () => {
         await pool.query(
-          `INSERT INTO society_${societyId}.messages (id, conversation_id, sender_id, receiver_id, content, read_at, created_at)
+          `INSERT INTO \"society_${societyId}\".messages (id, conversation_id, sender_id, receiver_id, content, read_at, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [message.id, message.conversation_id, message.sender_id, message.receiver_id, message.content, message.read_at, message.created_at]
         );
@@ -176,7 +176,7 @@ exports.getUnreadCount = (req, res) => {
     if (isPostgresEnabled) {
       return ensureMessageTables(societyId).then(async () => {
         const r = await pool.query(
-          `SELECT COUNT(*) as count FROM society_${societyId}.messages WHERE receiver_id = $1 AND read_at IS NULL`,
+          `SELECT COUNT(*) as count FROM \"society_${societyId}\".messages WHERE receiver_id = $1 AND read_at IS NULL`,
           [userId]
         );
         return res.json({ count: parseInt(r.rows[0]?.count || 0) });

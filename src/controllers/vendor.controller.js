@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureVendorTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.vendors (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vendors (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       name TEXT,
@@ -26,7 +26,7 @@ const ensureVendorTables = async (societyId) => {
     )
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.vendor_reviews (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vendor_reviews (
       id TEXT PRIMARY KEY,
       vendor_id TEXT,
       user_id TEXT,
@@ -44,7 +44,7 @@ exports.getAll = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureVendorTables(societyId).then(async () => {
-        let query = `SELECT * FROM society_${societyId}.vendors WHERE society_id = $1`;
+        let query = `SELECT * FROM \"society_${societyId}\".vendors WHERE society_id = $1`;
         const params = [societyId];
         let idx = 2;
 
@@ -103,7 +103,7 @@ exports.create = (req, res) => {
     if (isPostgresEnabled) {
       return ensureVendorTables(societyId).then(async () => {
         await pool.query(
-          `INSERT INTO society_${societyId}.vendors (id, society_id, name, category, contact_person, phone, email, address, services, hourly_rate, rating, total_ratings, is_verified, is_active, created_by, created_at)
+          `INSERT INTO \"society_${societyId}\".vendors (id, society_id, name, category, contact_person, phone, email, address, services, hourly_rate, rating, total_ratings, is_verified, is_active, created_by, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
           [vendor.id, vendor.society_id, vendor.name, vendor.category, vendor.contact_person, vendor.phone, vendor.email, vendor.address, vendor.services, vendor.hourly_rate, vendor.rating, vendor.total_ratings, vendor.is_verified, vendor.is_active, vendor.created_by, vendor.created_at]
         );
@@ -146,8 +146,8 @@ exports.update = (req, res) => {
         fields.push(`updated_at = $${idx++}`); values.push(now);
         values.push(id);
 
-        await pool.query(`UPDATE society_${societyId}.vendors SET ${fields.join(', ')} WHERE id = $${idx}`, values);
-        const r = await pool.query(`SELECT * FROM society_${societyId}.vendors WHERE id = $1`, [id]);
+        await pool.query(`UPDATE \"society_${societyId}\".vendors SET ${fields.join(', ')} WHERE id = $${idx}`, values);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".vendors WHERE id = $1`, [id]);
         return res.json({ vendor: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to update vendor' }));
     }
@@ -184,7 +184,7 @@ exports.rate = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureVendorTables(societyId).then(async () => {
-        const vendor = await pool.query(`SELECT * FROM society_${societyId}.vendors WHERE id = $1`, [id]);
+        const vendor = await pool.query(`SELECT * FROM \"society_${societyId}\".vendors WHERE id = $1`, [id]);
         if (!vendor.rows[0]) return res.status(404).json({ error: 'Vendor not found' });
 
         const currentRating = vendor.rows[0].rating || 0;
@@ -193,17 +193,17 @@ exports.rate = (req, res) => {
         const newRating = ((currentRating * currentCount) + rating) / newCount;
 
         await pool.query(
-          `UPDATE society_${societyId}.vendors SET rating = $1, total_ratings = $2, updated_at = $3 WHERE id = $4`,
+          `UPDATE \"society_${societyId}\".vendors SET rating = $1, total_ratings = $2, updated_at = $3 WHERE id = $4`,
           [parseFloat(newRating.toFixed(1)), newCount, now, id]
         );
 
         await pool.query(
-          `INSERT INTO society_${societyId}.vendor_reviews (id, vendor_id, user_id, rating, review, created_at)
+          `INSERT INTO \"society_${societyId}\".vendor_reviews (id, vendor_id, user_id, rating, review, created_at)
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [uuidv4(), id, req.user.id, rating, review, now]
         );
 
-        const updated = await pool.query(`SELECT * FROM society_${societyId}.vendors WHERE id = $1`, [id]);
+        const updated = await pool.query(`SELECT * FROM \"society_${societyId}\".vendors WHERE id = $1`, [id]);
         return res.json({ vendor: updated.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to rate vendor' }));
     }
@@ -241,7 +241,7 @@ exports.getReviews = (req, res) => {
       return ensureVendorTables(societyId).then(async () => {
         const r = await pool.query(`
           SELECT vr.*, u.first_name, u.last_name, u.flat_number, u.wing
-          FROM society_${societyId}.vendor_reviews vr
+          FROM \"society_${societyId}\".vendor_reviews vr
           JOIN platform.users u ON u.id = vr.user_id
           WHERE vr.vendor_id = $1
           ORDER BY vr.created_at DESC
@@ -274,7 +274,7 @@ exports.delete = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureVendorTables(societyId).then(async () => {
-        await pool.query(`DELETE FROM society_${societyId}.vendors WHERE id = $1`, [id]);
+        await pool.query(`DELETE FROM \"society_${societyId}\".vendors WHERE id = $1`, [id]);
         return res.json({ message: 'Vendor removed' });
       }).catch(() => res.status(500).json({ error: 'Failed to remove vendor' }));
     }

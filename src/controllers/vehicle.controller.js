@@ -3,9 +3,9 @@ const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureVehicleTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS society_${societyId}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.vehicles (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".vehicles (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       flat_id TEXT,
@@ -22,7 +22,7 @@ const ensureVehicleTables = async (societyId) => {
     )
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS society_${societyId}.parking_slots (
+    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".parking_slots (
       id TEXT PRIMARY KEY,
       society_id TEXT,
       slot_number TEXT,
@@ -45,7 +45,7 @@ exports.getAll = (req, res) => {
     if (isPostgresEnabled) {
       return ensureVehicleTables(societyId).then(async () => {
         let query = `SELECT v.*, u.flat_number, u.wing, u.first_name, u.last_name
-          FROM society_${societyId}.vehicles v
+          FROM \"society_${societyId}\".vehicles v
           LEFT JOIN platform.users u ON u.id = v.flat_id
           WHERE v.society_id = $1`;
         const params = [societyId];
@@ -105,18 +105,18 @@ exports.create = (req, res) => {
     if (isPostgresEnabled) {
       return ensureVehicleTables(societyId).then(async () => {
         const existing = await pool.query(
-          `SELECT * FROM society_${societyId}.vehicles WHERE vehicle_number = $1 AND society_id = $2`,
+          `SELECT * FROM \"society_${societyId}\".vehicles WHERE vehicle_number = $1 AND society_id = $2`,
           [vehicle_number.toUpperCase(), societyId]
         );
         if (existing.rows.length > 0) return res.status(409).json({ error: 'Vehicle already registered' });
 
         const id = uuidv4();
         await pool.query(
-          `INSERT INTO society_${societyId}.vehicles (id, society_id, flat_id, vehicle_number, vehicle_type, make_model, color, sticker_number, parking_slot, rc_book_url, is_active, created_at)
+          `INSERT INTO \"society_${societyId}\".vehicles (id, society_id, flat_id, vehicle_number, vehicle_type, make_model, color, sticker_number, parking_slot, rc_book_url, is_active, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
           [id, societyId, flat_id, vehicle_number.toUpperCase(), vehicle_type, make_model, color, sticker_number, parking_slot, rc_book_url, is_active !== false, now]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.vehicles WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".vehicles WHERE id = $1`, [id]);
         return res.status(201).json({ vehicle: r.rows[0] });
       }).catch((err) => { console.error('Vehicle API error:', err.message); return res.status(500).json({ error: 'Failed to register vehicle' }); });
     }
@@ -166,8 +166,8 @@ exports.update = (req, res) => {
         fields.push(`updated_at = $${idx++}`); values.push(now);
         values.push(id);
 
-        await pool.query(`UPDATE society_${societyId}.vehicles SET ${fields.join(', ')} WHERE id = $${idx}`, values);
-        const r = await pool.query(`SELECT * FROM society_${societyId}.vehicles WHERE id = $1`, [id]);
+        await pool.query(`UPDATE \"society_${societyId}\".vehicles SET ${fields.join(', ')} WHERE id = $${idx}`, values);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".vehicles WHERE id = $1`, [id]);
         return res.json({ vehicle: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to update vehicle' }));
     }
@@ -197,7 +197,7 @@ exports.delete = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureVehicleTables(societyId).then(async () => {
-        await pool.query(`DELETE FROM society_${societyId}.vehicles WHERE id = $1`, [id]);
+        await pool.query(`DELETE FROM \"society_${societyId}\".vehicles WHERE id = $1`, [id]);
         return res.json({ message: 'Vehicle removed' });
       }).catch(() => res.status(500).json({ error: 'Failed to remove vehicle' }));
     }
@@ -218,8 +218,8 @@ exports.getParkingSlots = (req, res) => {
     if (isPostgresEnabled) {
       return ensureVehicleTables(societyId).then(async () => {
         let query = `SELECT ps.*, v.vehicle_number, u.flat_number, u.wing
-          FROM society_${societyId}.parking_slots ps
-          LEFT JOIN society_${societyId}.vehicles v ON v.parking_slot = ps.slot_number AND v.vehicle_type = ps.slot_type
+          FROM \"society_${societyId}\".parking_slots ps
+          LEFT JOIN \"society_${societyId}\".vehicles v ON v.parking_slot = ps.slot_number AND v.vehicle_type = ps.slot_type
           LEFT JOIN platform.users u ON u.id = ps.flat_id
           WHERE ps.society_id = $1`;
         const params = [societyId];
@@ -261,18 +261,18 @@ exports.createParkingSlot = (req, res) => {
     if (isPostgresEnabled) {
       return ensureVehicleTables(societyId).then(async () => {
         const existing = await pool.query(
-          `SELECT * FROM society_${societyId}.parking_slots WHERE society_id = $1 AND slot_number = $2 AND slot_type = $3`,
+          `SELECT * FROM \"society_${societyId}\".parking_slots WHERE society_id = $1 AND slot_number = $2 AND slot_type = $3`,
           [societyId, slot_number, slot_type]
         );
         if (existing.rows.length > 0) return res.status(409).json({ error: 'Slot already exists' });
 
         const id = uuidv4();
         await pool.query(
-          `INSERT INTO society_${societyId}.parking_slots (id, society_id, slot_number, slot_type, floor, section, flat_id, is_available, created_at)
+          `INSERT INTO \"society_${societyId}\".parking_slots (id, society_id, slot_number, slot_type, floor, section, flat_id, is_available, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)`,
           [id, societyId, slot_number, slot_type, floor, section, flat_id, now]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.parking_slots WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".parking_slots WHERE id = $1`, [id]);
         return res.status(201).json({ slot: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to create parking slot' }));
     }
@@ -301,10 +301,10 @@ exports.assignSlot = (req, res) => {
     if (isPostgresEnabled) {
       return ensureVehicleTables(societyId).then(async () => {
         await pool.query(
-          `UPDATE society_${societyId}.parking_slots SET flat_id = $1, is_available = 0, updated_at = $2 WHERE id = $3`,
+          `UPDATE \"society_${societyId}\".parking_slots SET flat_id = $1, is_available = 0, updated_at = $2 WHERE id = $3`,
           [flat_id, now, id]
         );
-        const r = await pool.query(`SELECT * FROM society_${societyId}.parking_slots WHERE id = $1`, [id]);
+        const r = await pool.query(`SELECT * FROM \"society_${societyId}\".parking_slots WHERE id = $1`, [id]);
         return res.json({ slot: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to assign slot' }));
     }

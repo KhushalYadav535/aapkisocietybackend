@@ -11,7 +11,7 @@ exports.getCollectionReport = async (req, res) => {
     if (isPostgresEnabled) {
       await ensurePlatformSchema();
 
-      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `society_${societyId}`;
+      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `\"society_${societyId}\"`;
 
       const monthlyQuery = `
         SELECT
@@ -110,7 +110,7 @@ exports.getComplaintReport = async (req, res) => {
 
     if (isPostgresEnabled) {
       await ensurePlatformSchema();
-      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `society_${societyId}`;
+      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `\"society_${societyId}\"`;
 
       const statsRes = await pool.query(`
         SELECT status, COUNT(*) as count FROM ${schema}.complaints GROUP BY status
@@ -181,7 +181,7 @@ exports.getBillingReport = async (req, res) => {
 
     if (isPostgresEnabled) {
       await ensurePlatformSchema();
-      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `society_${societyId}`;
+      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `\"society_${societyId}\"`;
 
       const statusRes = await pool.query(`
         SELECT status, COUNT(*) as count, SUM(total_amount) as amount FROM ${schema}.bills GROUP BY status
@@ -246,7 +246,7 @@ exports.getVisitorReport = async (req, res) => {
 
     if (isPostgresEnabled) {
       await ensurePlatformSchema();
-      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `society_${societyId}`;
+      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `\"society_${societyId}\"`;
 
       const totalRes = await pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'CHECKED_IN') as checked_in, COUNT(*) FILTER (WHERE status = 'CHECKED_OUT') as checked_out FROM ${schema}.visitors`);
       const purposeRes = await pool.query(`SELECT purpose, COUNT(*) as count FROM ${schema}.visitors GROUP BY purpose`);
@@ -297,10 +297,10 @@ exports.getDashboardSummary = async (req, res) => {
 
     if (isPostgresEnabled) {
       await ensurePlatformSchema();
-      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `society_${societyId}`;
+      const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `\"society_${societyId}\"`;
 
       const [memRes, billRes, compRes, visRes, noticeRes] = await Promise.all([
-        pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE is_active = 1) as active FROM ${schema === 'platform' ? 'platform' : `society_${societyId}`}.users`),
+        pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE is_active = 1) as active FROM ${schema === 'platform' ? 'platform' : `\"society_${societyId}\"`}.users`),
         pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'PENDING' OR status = 'PENDING_APPROVAL') as pending, COUNT(*) FILTER (WHERE status = 'OVERDUE') as overdue, COALESCE(SUM(paid_amount), 0) as collected FROM ${schema}.bills`),
         pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'OPEN') as open, COUNT(*) FILTER (WHERE status = 'RESOLVED') as resolved FROM ${schema}.complaints`),
         pool.query(`SELECT COUNT(*) FILTER (WHERE DATE(check_in) = CURRENT_DATE) as today, COUNT(*) FILTER (WHERE status = 'CHECKED_IN') as inside FROM ${schema}.visitors`),
@@ -341,7 +341,7 @@ exports.getDefaulterAging = async (req, res) => {
 
     if (isPostgresEnabled) {
       await ensurePlatformSchema();
-      const schema = `society_${societyId}`;
+      const schema = `\"society_${societyId}\"`;
       const r = await pool.query(`
         SELECT
           u.id AS member_id,

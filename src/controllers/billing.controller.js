@@ -67,7 +67,7 @@ exports.getAllBills = (req, res) => {
         }
         const r = await client.query(query, params);
         return res.json({ bills: r.rows });
-      }).catch(() => res.status(500).json({ error: 'Failed to fetch bills' }));
+      }).catch((err) => { console.error('Billing error:', err); return res.status(500).json({ error: 'Failed to process request' }); });
     }
     const db = getDb();
     let bills;
