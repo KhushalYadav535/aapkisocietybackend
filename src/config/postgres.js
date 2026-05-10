@@ -4,7 +4,7 @@ const connectionString = process.env.DATABASE_URL;
 const pool = connectionString ? new Pool({ connectionString }) : null;
 const isPostgresEnabled = !!pool;
 const isPostgresOnly = String(process.env.POSTGRES_ONLY || 'false').toLowerCase() === 'true';
-const getTenantSchemaName = (tenantId) => `tenant_${String(tenantId).replace(/-/g, '_')}`;
+const getTenantSchemaName = (tenantId) => `society_${String(tenantId).replace(/-/g, '_')}`;
 
 const ensurePlatformSchema = async () => {
   if (!pool) return;
@@ -35,7 +35,7 @@ const ensurePlatformSchema = async () => {
 const createTenantSchema = async (tenantId) => {
   if (!pool) throw new Error('DATABASE_URL is not configured');
   const schema = getTenantSchemaName(tenantId);
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
   return schema;
 };
 
@@ -44,7 +44,7 @@ const withTenant = async (tenantId, callback) => {
   const client = await pool.connect();
   try {
     const schema = getTenantSchemaName(tenantId);
-    await client.query(`SET search_path TO ${schema}, platform, public`);
+    await client.query(`SET search_path TO "${schema}", platform, public`);
     return await callback(client);
   } finally {
     client.release();

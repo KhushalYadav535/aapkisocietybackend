@@ -173,9 +173,9 @@ async function seed() {
     console.log(`✅ Users created (1 Platform Admin, 3 Staff, ${residentDefs.length} Residents)`);
 
     // ─── 7. Tenant Schema ────────────────────────────────────────────────────
-    const tenantSchema = `tenant_${societyId.replace(/-/g, '_')}`;
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${tenantSchema}`);
-    await client.query(`SET search_path TO ${tenantSchema}, platform, public`);
+    const tenantSchema = `society_${societyId.replace(/-/g, '_')}`;
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${tenantSchema}"`);
+    await client.query(`SET search_path TO "${tenantSchema}", platform, public`);
 
     // Tenant tables
     await client.query(`
