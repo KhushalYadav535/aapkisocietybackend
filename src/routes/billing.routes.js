@@ -31,6 +31,11 @@ router.get('/payments', billingController.getPayments);
 router.post('/payments', billingController.recordPayment);
 
 router.get('/summary', billingController.getBillingSummary);
+router.get('/arrears-aging', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.getArrearsAging);
+router.get('/defaulters', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.getDefaultersList);
+router.get('/dunning-history', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.getDunningHistory);
+router.get('/dunning-config', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.getDunningConfig);
+router.post('/send-reminder', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.sendReminder);
 
 module.exports = router;
 

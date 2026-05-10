@@ -430,3 +430,455 @@ exports.getDefaulterAging = async (req, res) => {
     res.status(500).json({ error: 'Failed to generate defaulter aging report' });
   }
 };
+
+// ─── Trial Balance Report (delegates to accounting) ─────────────────
+exports.getTrialBalance = async (req, res) => {
+  try {
+    const { from_date, to_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: { accounts: [], totals: { debit: 0, credit: 0 } } });
+    const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `"society_${societyId}"`;
+
+    const result = await pool.query(`
+      SELECT a.id, a.name, a.group_name, a.sub_group,
+        COALESCE(SUM(CASE WHEN ve.debit_amount > 0 THEN ve.debit_amount ELSE 0 END), 0) AS debit,
+        COALESCE(SUM(CASE WHEN ve.credit_amount > 0 THEN ve.credit_amount ELSE 0 END), 0) AS credit
+      FROM ${schema}.accounts a
+      LEFT JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      LEFT JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED'
+        ${from_date ? "AND v.voucher_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND v.voucher_date <= '" + to_date + "'" : ''}
+      GROUP BY a.id, a.name, a.group_name, a.sub_group
+      HAVING SUM(COALESCE(ve.debit_amount,0)) > 0 OR SUM(COALESCE(ve.credit_amount,0)) > 0
+      ORDER BY a.group_name, a.name
+    `);
+
+    const accounts = result.rows.map(r => ({ ...r, debit: parseFloat(r.debit), credit: parseFloat(r.credit) }));
+    const totals = accounts.reduce((acc, a) => ({ debit: acc.debit + a.debit, credit: acc.credit + a.credit }), { debit: 0, credit: 0 });
+
+    res.json({ report: { accounts, totals, period: { from: from_date, to: to_date } } });
+  } catch (error) {
+    console.error('Trial balance report error:', error);
+    res.status(500).json({ error: 'Failed to generate trial balance report' });
+  }
+};
+
+// ─── Income & Expenditure Statement ─────────────────────────────────
+exports.getIncomeExpenditure = async (req, res) => {
+  try {
+    const { from_date, to_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: { income: [], expenditure: [], surplus: 0 } });
+    const schema = `"society_${societyId}"`;
+
+    const incomeR = await pool.query(`
+      SELECT a.name, a.sub_group, COALESCE(SUM(ve.credit_amount), 0) AS amount
+      FROM ${schema}.accounts a
+      JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED'
+      WHERE a.group_name IN ('INCOME', 'Revenue')
+        ${from_date ? "AND v.voucher_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND v.voucher_date <= '" + to_date + "'" : ''}
+      GROUP BY a.name, a.sub_group ORDER BY amount DESC
+    `);
+
+    const expR = await pool.query(`
+      SELECT a.name, a.sub_group, COALESCE(SUM(ve.debit_amount), 0) AS amount
+      FROM ${schema}.accounts a
+      JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED'
+      WHERE a.group_name IN ('EXPENSE', 'Expenditure')
+        ${from_date ? "AND v.voucher_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND v.voucher_date <= '" + to_date + "'" : ''}
+      GROUP BY a.name, a.sub_group ORDER BY amount DESC
+    `);
+
+    const totalIncome = incomeR.rows.reduce((s, r) => s + parseFloat(r.amount), 0);
+    const totalExpenditure = expR.rows.reduce((s, r) => s + parseFloat(r.amount), 0);
+
+    res.json({ report: { income: incomeR.rows, expenditure: expR.rows, total_income: totalIncome, total_expenditure: totalExpenditure, surplus: totalIncome - totalExpenditure, period: { from: from_date, to: to_date } } });
+  } catch (error) {
+    console.error('I&E report error:', error);
+    res.status(500).json({ error: 'Failed to generate I&E report' });
+  }
+};
+
+// ─── Balance Sheet ──────────────────────────────────────────────────
+exports.getBalanceSheet = async (req, res) => {
+  try {
+    const { as_of_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: { assets: [], liabilities: [], equity: [] } });
+    const schema = `"society_${societyId}"`;
+    const dateFilter = as_of_date ? `AND v.voucher_date <= '${as_of_date}'` : '';
+
+    const assetsR = await pool.query(`
+      SELECT a.name, a.sub_group,
+        COALESCE(SUM(ve.debit_amount),0) - COALESCE(SUM(ve.credit_amount),0) AS balance
+      FROM ${schema}.accounts a
+      LEFT JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      LEFT JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED' ${dateFilter}
+      WHERE a.group_name IN ('ASSET', 'Current Assets', 'Fixed Assets', 'Bank Accounts')
+      GROUP BY a.name, a.sub_group ORDER BY a.sub_group, a.name
+    `);
+
+    const liabR = await pool.query(`
+      SELECT a.name, a.sub_group,
+        COALESCE(SUM(ve.credit_amount),0) - COALESCE(SUM(ve.debit_amount),0) AS balance
+      FROM ${schema}.accounts a
+      LEFT JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      LEFT JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED' ${dateFilter}
+      WHERE a.group_name IN ('LIABILITY', 'Current Liabilities', 'Loans')
+      GROUP BY a.name, a.sub_group ORDER BY a.sub_group, a.name
+    `);
+
+    const totalAssets = assetsR.rows.reduce((s, r) => s + parseFloat(r.balance || 0), 0);
+    const totalLiabilities = liabR.rows.reduce((s, r) => s + parseFloat(r.balance || 0), 0);
+
+    res.json({ report: { assets: assetsR.rows, liabilities: liabR.rows, total_assets: totalAssets, total_liabilities: totalLiabilities, net_worth: totalAssets - totalLiabilities, as_of_date: as_of_date || new Date().toISOString().split('T')[0] } });
+  } catch (error) {
+    console.error('Balance sheet error:', error);
+    res.status(500).json({ error: 'Failed to generate balance sheet' });
+  }
+};
+
+// ─── Cash Flow Report ───────────────────────────────────────────────
+exports.getCashFlow = async (req, res) => {
+  try {
+    const { from_date, to_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: { inflows: [], outflows: [], net: 0 } });
+    const schema = `"society_${societyId}"`;
+
+    const inflowR = await pool.query(`
+      SELECT a.name, COALESCE(SUM(ve.debit_amount), 0) AS amount
+      FROM ${schema}.accounts a
+      JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED' AND v.voucher_type = 'RECEIPT'
+        ${from_date ? "AND v.voucher_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND v.voucher_date <= '" + to_date + "'" : ''}
+      WHERE a.group_name IN ('Bank Accounts', 'Cash')
+      GROUP BY a.name ORDER BY amount DESC
+    `);
+
+    const outflowR = await pool.query(`
+      SELECT a.name, COALESCE(SUM(ve.credit_amount), 0) AS amount
+      FROM ${schema}.accounts a
+      JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED' AND v.voucher_type = 'PAYMENT'
+        ${from_date ? "AND v.voucher_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND v.voucher_date <= '" + to_date + "'" : ''}
+      WHERE a.group_name IN ('Bank Accounts', 'Cash')
+      GROUP BY a.name ORDER BY amount DESC
+    `);
+
+    const totalInflow = inflowR.rows.reduce((s, r) => s + parseFloat(r.amount), 0);
+    const totalOutflow = outflowR.rows.reduce((s, r) => s + parseFloat(r.amount), 0);
+
+    res.json({ report: { inflows: inflowR.rows, outflows: outflowR.rows, total_inflow: totalInflow, total_outflow: totalOutflow, net: totalInflow - totalOutflow } });
+  } catch (error) {
+    console.error('Cash flow error:', error);
+    res.status(500).json({ error: 'Failed to generate cash flow report' });
+  }
+};
+
+// ─── Staff Attendance Report ────────────────────────────────────────
+exports.getStaffAttendance = async (req, res) => {
+  try {
+    const { from_date, to_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: [] });
+    const schema = `"society_${societyId}"`;
+
+    const result = await pool.query(`
+      SELECT s.id, s.name, s.role as staff_role,
+        COUNT(sa.id) AS total_records,
+        COUNT(sa.id) FILTER (WHERE sa.status = 'PRESENT') AS present,
+        COUNT(sa.id) FILTER (WHERE sa.status = 'ABSENT') AS absent,
+        COUNT(sa.id) FILTER (WHERE sa.status = 'HALF_DAY') AS half_days,
+        ROUND(COUNT(sa.id) FILTER (WHERE sa.status = 'PRESENT')::numeric / NULLIF(COUNT(sa.id), 0) * 100, 1) AS attendance_pct
+      FROM ${schema}.staff s
+      LEFT JOIN ${schema}.staff_attendance sa ON sa.staff_id = s.id
+        ${from_date ? "AND sa.date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND sa.date <= '" + to_date + "'" : ''}
+      GROUP BY s.id, s.name, s.role
+      ORDER BY attendance_pct ASC
+    `);
+
+    res.json({ report: result.rows });
+  } catch (error) {
+    console.error('Staff attendance report error:', error);
+    res.status(500).json({ error: 'Failed to generate staff attendance report' });
+  }
+};
+
+// ─── Facility Usage Report ──────────────────────────────────────────
+exports.getFacilityUsage = async (req, res) => {
+  try {
+    const { from_date, to_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: [] });
+    const schema = `"society_${societyId}"`;
+
+    const result = await pool.query(`
+      SELECT f.id, f.name, f.type,
+        COUNT(fb.id) AS total_bookings,
+        COUNT(fb.id) FILTER (WHERE fb.status = 'CONFIRMED') AS confirmed,
+        COUNT(fb.id) FILTER (WHERE fb.status = 'CANCELLED') AS cancelled,
+        COALESCE(SUM(fb.amount), 0) AS total_revenue
+      FROM ${schema}.facilities f
+      LEFT JOIN ${schema}.facility_bookings fb ON fb.facility_id = f.id
+        ${from_date ? "AND fb.booking_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND fb.booking_date <= '" + to_date + "'" : ''}
+      GROUP BY f.id, f.name, f.type
+      ORDER BY total_bookings DESC
+    `);
+
+    res.json({ report: result.rows });
+  } catch (error) {
+    console.error('Facility usage report error:', error);
+    res.status(500).json({ error: 'Failed to generate facility usage report' });
+  }
+};
+
+// ─── Member Directory Report ────────────────────────────────────────
+exports.getMemberReport = async (req, res) => {
+  try {
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: { members: [], summary: {} } });
+
+    const result = await pool.query(`
+      SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.flat_number, u.wing, u.role, u.is_active,
+        u.created_at, COUNT(b.id) AS total_bills,
+        COALESCE(SUM(b.total_amount - COALESCE(b.paid_amount, 0)), 0) AS outstanding
+      FROM platform.users u
+      LEFT JOIN "society_${societyId}".bills b ON b.member_id = u.id AND b.status IN ('PENDING','OVERDUE','PARTIALLY_PAID')
+      WHERE u.society_id = $1
+      GROUP BY u.id ORDER BY u.wing, u.flat_number
+    `, [societyId]);
+
+    const members = result.rows;
+    const summary = {
+      total: members.length,
+      active: members.filter(m => m.is_active).length,
+      by_role: {},
+      by_wing: {},
+    };
+    members.forEach(m => {
+      summary.by_role[m.role] = (summary.by_role[m.role] || 0) + 1;
+      if (m.wing) summary.by_wing[m.wing] = (summary.by_wing[m.wing] || 0) + 1;
+    });
+
+    res.json({ report: { members, summary } });
+  } catch (error) {
+    console.error('Member report error:', error);
+    res.status(500).json({ error: 'Failed to generate member report' });
+  }
+};
+
+// ─── Maintenance Due Report ─────────────────────────────────────────
+exports.getMaintenanceDue = async (req, res) => {
+  try {
+    const { month } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: [] });
+    const schema = `"society_${societyId}"`;
+
+    const result = await pool.query(`
+      SELECT u.flat_number, u.wing, u.first_name || ' ' || u.last_name AS name,
+        b.total_amount, b.paid_amount, b.total_amount - COALESCE(b.paid_amount, 0) AS due,
+        b.due_date, b.status, b.billing_period
+      FROM ${schema}.bills b
+      JOIN platform.users u ON u.id = b.member_id
+      WHERE b.society_id = $1 AND b.status IN ('PENDING', 'OVERDUE', 'PARTIALLY_PAID')
+        ${month ? "AND b.billing_period = '" + month + "'" : ''}
+      ORDER BY u.wing, u.flat_number
+    `, [societyId]);
+
+    const totalDue = result.rows.reduce((s, r) => s + parseFloat(r.due || 0), 0);
+    res.json({ report: result.rows, total_due: totalDue, count: result.rows.length });
+  } catch (error) {
+    console.error('Maintenance due report error:', error);
+    res.status(500).json({ error: 'Failed to generate maintenance due report' });
+  }
+};
+
+// ─── Interest Calculation Report ────────────────────────────────────
+exports.getInterestReport = async (req, res) => {
+  try {
+    const { rate_pa, as_of_date } = req.query;
+    const societyId = req.user.society_id;
+    const interestRate = parseFloat(rate_pa || 18) / 100 / 365;
+    if (!isPostgresEnabled) return res.json({ report: [] });
+    const schema = `"society_${societyId}"`;
+    const asOf = as_of_date || new Date().toISOString().split('T')[0];
+
+    const result = await pool.query(`
+      SELECT u.flat_number, u.wing, u.first_name || ' ' || u.last_name AS name,
+        b.id AS bill_id, b.total_amount, b.paid_amount,
+        b.total_amount - COALESCE(b.paid_amount, 0) AS principal,
+        b.due_date,
+        GREATEST(DATE '${asOf}' - b.due_date, 0) AS days_overdue
+      FROM ${schema}.bills b
+      JOIN platform.users u ON u.id = b.member_id
+      WHERE b.society_id = $1 AND b.status IN ('OVERDUE', 'PARTIALLY_PAID')
+        AND b.due_date < '${asOf}'
+      ORDER BY u.wing, u.flat_number
+    `, [societyId]);
+
+    const report = result.rows.map(r => {
+      const principal = parseFloat(r.principal || 0);
+      const daysOverdue = parseInt(r.days_overdue || 0);
+      const interest = principal * interestRate * daysOverdue;
+      return { ...r, principal, days_overdue: daysOverdue, interest: Math.round(interest * 100) / 100, total_with_interest: Math.round((principal + interest) * 100) / 100 };
+    });
+
+    const totalInterest = report.reduce((s, r) => s + r.interest, 0);
+    const totalPrincipal = report.reduce((s, r) => s + r.principal, 0);
+
+    res.json({ report, summary: { total_principal: totalPrincipal, total_interest: totalInterest, grand_total: totalPrincipal + totalInterest, rate_pa: parseFloat(rate_pa || 18), as_of_date: asOf } });
+  } catch (error) {
+    console.error('Interest report error:', error);
+    res.status(500).json({ error: 'Failed to generate interest report' });
+  }
+};
+
+// ─── Receipts & Payments Account ────────────────────────────────────
+exports.getReceiptsPayments = async (req, res) => {
+  try {
+    const { from_date, to_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: { receipts: [], payments: [], opening_balance: 0, closing_balance: 0 } });
+    const schema = `"society_${societyId}"`;
+
+    const receiptsR = await pool.query(`
+      SELECT a.name, a.sub_group, COALESCE(SUM(ve.debit_amount), 0) AS amount
+      FROM ${schema}.accounts a
+      JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED' AND v.voucher_type = 'RECEIPT'
+      WHERE a.group_name IN ('Bank Accounts', 'Cash', 'ASSET')
+        ${from_date ? "AND v.voucher_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND v.voucher_date <= '" + to_date + "'" : ''}
+      GROUP BY a.name, a.sub_group ORDER BY amount DESC
+    `);
+
+    const paymentsR = await pool.query(`
+      SELECT a.name, a.sub_group, COALESCE(SUM(ve.credit_amount), 0) AS amount
+      FROM ${schema}.accounts a
+      JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED' AND v.voucher_type = 'PAYMENT'
+      WHERE a.group_name IN ('Bank Accounts', 'Cash', 'ASSET')
+        ${from_date ? "AND v.voucher_date >= '" + from_date + "'" : ''}
+        ${to_date ? "AND v.voucher_date <= '" + to_date + "'" : ''}
+      GROUP BY a.name, a.sub_group ORDER BY amount DESC
+    `);
+
+    const openingR = await pool.query(`
+      SELECT COALESCE(SUM(CASE WHEN a.group_name IN ('Bank Accounts','Cash') THEN COALESCE(a.opening_balance,0) ELSE 0 END), 0) AS opening
+      FROM ${schema}.accounts a
+      WHERE a.group_name IN ('Bank Accounts', 'Cash')
+    `);
+
+    const totalReceipts = receiptsR.rows.reduce((s, r) => s + parseFloat(r.amount), 0);
+    const totalPayments = paymentsR.rows.reduce((s, r) => s + parseFloat(r.amount), 0);
+    const openingBalance = parseFloat(openingR.rows[0]?.opening || 0);
+    const closingBalance = openingBalance + totalReceipts - totalPayments;
+
+    res.json({ report: { receipts: receiptsR.rows, payments: paymentsR.rows, total_receipts: totalReceipts, total_payments: totalPayments, opening_balance: openingBalance, closing_balance: closingBalance, period: { from: from_date, to: to_date } } });
+  } catch (error) {
+    console.error('Receipts & Payments error:', error);
+    res.status(500).json({ error: 'Failed to generate receipts & payments report' });
+  }
+};
+
+// ─── Fund-wise Summary ──────────────────────────────────────────────
+exports.getFundSummary = async (req, res) => {
+  try {
+    const { as_of_date } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: { funds: [] } });
+    const schema = `"society_${societyId}"`;
+    const dateFilter = as_of_date ? `AND v.voucher_date <= '${as_of_date}'` : '';
+
+    const result = await pool.query(`
+      SELECT a.sub_group AS fund_name,
+        COALESCE(SUM(ve.credit_amount), 0) - COALESCE(SUM(ve.debit_amount), 0) AS balance,
+        COUNT(DISTINCT a.id) AS accounts_count
+      FROM ${schema}.accounts a
+      LEFT JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      LEFT JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED' ${dateFilter}
+      WHERE a.group_name IN ('Capital Account', 'Reserves & Surplus', 'Corpus Fund', 'Sinking Fund', 'Repair Fund', 'Education Fund', 'Reserve Fund')
+        OR a.sub_group ILIKE '%fund%'
+      GROUP BY a.sub_group
+      HAVING COALESCE(SUM(ve.credit_amount), 0) - COALESCE(SUM(ve.debit_amount), 0) != 0
+      ORDER BY balance DESC
+    `);
+
+    const totalFunds = result.rows.reduce((s, r) => s + parseFloat(r.balance), 0);
+    res.json({ report: { funds: result.rows, total_fund_balance: totalFunds, as_of_date: as_of_date || new Date().toISOString().split('T')[0] } });
+  } catch (error) {
+    console.error('Fund summary error:', error);
+    res.status(500).json({ error: 'Failed to generate fund summary report' });
+  }
+};
+
+// ─── Budget vs Actual Variance ──────────────────────────────────────
+exports.getBudgetVariance = async (req, res) => {
+  try {
+    const { fy } = req.query;
+    const societyId = req.user.society_id;
+    if (!isPostgresEnabled) return res.json({ report: [] });
+    const schema = `"society_${societyId}"`;
+
+    // Ensure budget table exists
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ${schema}.budgets (
+        id TEXT PRIMARY KEY,
+        account_id TEXT,
+        account_name TEXT,
+        category TEXT,
+        fy TEXT,
+        budgeted_amount NUMERIC DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    const fyStart = fy ? `${fy}-04-01` : `${new Date().getFullYear()}-04-01`;
+    const fyEnd = fy ? `${parseInt(fy) + 1}-03-31` : `${new Date().getFullYear() + 1}-03-31`;
+
+    const result = await pool.query(`
+      SELECT b.account_name, b.category, b.budgeted_amount,
+        COALESCE(SUM(ve.debit_amount), 0) AS actual_expense,
+        COALESCE(SUM(ve.credit_amount), 0) AS actual_income
+      FROM ${schema}.budgets b
+      LEFT JOIN ${schema}.accounts a ON a.id = b.account_id OR a.name = b.account_name
+      LEFT JOIN ${schema}.voucher_entries ve ON ve.account_id = a.id
+      LEFT JOIN ${schema}.vouchers v ON v.id = ve.voucher_id AND v.status = 'APPROVED'
+        AND v.voucher_date BETWEEN $1 AND $2
+      WHERE b.fy = $3 OR b.fy IS NULL
+      GROUP BY b.account_name, b.category, b.budgeted_amount
+      ORDER BY b.category, b.account_name
+    `, [fyStart, fyEnd, fy || new Date().getFullYear().toString()]);
+
+    const report = result.rows.map(r => {
+      const budgeted = parseFloat(r.budgeted_amount || 0);
+      const actual = r.category === 'INCOME' ? parseFloat(r.actual_income) : parseFloat(r.actual_expense);
+      const variance = budgeted - actual;
+      const variancePct = budgeted > 0 ? Math.round((variance / budgeted) * 10000) / 100 : 0;
+      return { ...r, actual, variance, variance_pct: variancePct, status: variance >= 0 ? 'UNDER_BUDGET' : 'OVER_BUDGET' };
+    });
+
+    const totals = report.reduce((acc, r) => {
+      acc.total_budgeted += parseFloat(r.budgeted_amount || 0);
+      acc.total_actual += r.actual;
+      return acc;
+    }, { total_budgeted: 0, total_actual: 0 });
+    totals.total_variance = totals.total_budgeted - totals.total_actual;
+
+    res.json({ report, totals, fy: fy || new Date().getFullYear().toString() });
+  } catch (error) {
+    console.error('Budget variance error:', error);
+    res.status(500).json({ error: 'Failed to generate budget variance report' });
+  }
+};

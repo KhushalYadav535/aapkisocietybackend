@@ -370,7 +370,7 @@ exports.getBillingSummary = (req, res) => {
         const billsQuery = isResident
           ? "SELECT COALESCE(SUM(total_amount), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills WHERE member_id = $1"
           : "SELECT COALESCE(SUM(total_amount), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills";
-        
+
         const paymentsQuery = isResident
           ? "SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS' AND member_id = $1"
           : "SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS'";
@@ -384,7 +384,7 @@ exports.getBillingSummary = (req, res) => {
         const pendingBills = Number(billsR.rows[0].pending_bills);
         const overdueBills = Number(billsR.rows[0].overdue_bills);
         const totalCollected = Number(paymentsR.rows[0].total_collected);
-        
+
         return res.json({
           summary: {
             total_billed: totalBilled,
@@ -424,4 +424,193 @@ exports.getBillingSummary = (req, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Failed to get billing summary' });
   }
+};
+
+// --- Utility: ensure dunning tables ---
+const ensureDunningTables = async (client) => {
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS dunning_history (
+        id TEXT PRIMARY KEY,
+        member_id TEXT,
+        bill_id TEXT,
+        reminder_date DATE,
+        reminder_type TEXT,
+        status TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS dunning_config (
+        id TEXT PRIMARY KEY,
+        grace_days INTEGER DEFAULT 5,
+        reminder_sequence JSONB DEFAULT '[3,7,15,30]',
+        interest_rate NUMERIC DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+  } catch (err) {
+    if (err.message && err.message.includes('already exists')) return;
+    throw err;
+  }
+};
+
+exports.getArrearsAging = (req, res) => {
+  if (!isPostgresEnabled || !req.user.society_id) {
+    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+  }
+  return withTenant(req.user.society_id, async (client) => {
+    await ensureTenantBillingTables(client);
+    const buckets = [
+      { label: '0-30 days', days_from: 0, days_to: 30 },
+      { label: '31-60 days', days_from: 31, days_to: 60 },
+      { label: '61-90 days', days_from: 61, days_to: 90 },
+      { label: '91-180 days', days_from: 91, days_to: 180 },
+      { label: '180+ days', days_from: 181, days_to: 99999 },
+    ];
+    const result = [];
+    for (const b of buckets) {
+      const r = await client.query(`
+        SELECT COALESCE(SUM(total_amount - COALESCE(paid_amount, 0)), 0) AS total_amount,
+               COUNT(*) AS bill_count,
+               MIN(bill_date) AS oldest_date
+        FROM bills
+        WHERE status NOT IN ('PAID', 'REJECTED')
+          AND due_date < CURRENT_DATE
+          AND (total_amount - COALESCE(paid_amount, 0)) > 0
+          AND CURRENT_DATE - due_date BETWEEN $1 AND $2
+      `, [b.days_from, b.days_to]);
+      result.push({
+        label: b.label,
+        days_from: b.days_from,
+        days_to: b.days_to === 99999 ? null : b.days_to,
+        total_amount: Number(r.rows[0].total_amount),
+        bill_count: Number(r.rows[0].bill_count),
+        oldest_date: r.rows[0].oldest_date || null,
+      });
+    }
+    return res.json({ buckets: result, generated_at: new Date().toISOString() });
+  }).catch((err) => { console.error('getArrearsAging error:', err); res.status(500).json({ error: 'Failed to get arrears aging' }); });
+};
+
+exports.getDefaultersList = (req, res) => {
+  if (!isPostgresEnabled || !req.user.society_id) {
+    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+  }
+  return withTenant(req.user.society_id, async (client) => {
+    await ensureTenantBillingTables(client);
+    const r = await client.query(`
+      SELECT
+        b.member_id,
+        COALESCE(u.name, 'Unknown') AS member_name,
+        COALESCE(u.flat_number, 'N/A') AS flat_number,
+        COALESCE(u.wing, 'N/A') AS wing,
+        SUM(b.total_amount - COALESCE(b.paid_amount, 0)) AS total_outstanding,
+        MIN(b.bill_date) AS oldest_bill_date,
+        MAX(CURRENT_DATE - b.due_date) AS days_overdue,
+        COUNT(b.id) AS bill_count
+      FROM bills b
+      LEFT JOIN platform.users u ON b.member_id = u.id
+      WHERE b.society_id = $1
+        AND b.status NOT IN ('PAID', 'REJECTED')
+        AND (b.total_amount - COALESCE(b.paid_amount, 0)) > 0
+      GROUP BY b.member_id, u.name, u.flat_number, u.wing
+      ORDER BY total_outstanding DESC
+    `, [req.user.society_id]);
+    return res.json({
+      defaulters: r.rows.map(row => ({
+        member_id: row.member_id,
+        member_name: row.member_name,
+        flat_number: row.flat_number,
+        wing: row.wing,
+        total_outstanding: Number(row.total_outstanding),
+        oldest_bill_date: row.oldest_bill_date,
+        days_overdue: Number(row.days_overdue),
+        bill_count: Number(row.bill_count),
+      }))
+    });
+  }).catch((err) => { console.error('getDefaultersList error:', err); res.status(500).json({ error: 'Failed to get defaulters list' }); });
+};
+
+exports.getDunningHistory = (req, res) => {
+  if (!isPostgresEnabled || !req.user.society_id) {
+    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+  }
+  return withTenant(req.user.society_id, async (client) => {
+    await ensureDunningTables(client);
+    const r = await client.query(`
+      SELECT
+        dh.id, dh.member_id, dh.bill_id, dh.reminder_date,
+        dh.reminder_type, dh.status, dh.created_at,
+        COALESCE(u.name, 'Unknown') AS member_name,
+        b.bill_number, b.total_amount, b.due_date
+      FROM dunning_history dh
+      LEFT JOIN platform.users u ON dh.member_id = u.id
+      LEFT JOIN bills b ON dh.bill_id = b.id
+      ORDER BY dh.created_at DESC
+      LIMIT 500
+    `);
+    return res.json({ records: r.rows });
+  }).catch((err) => { console.error('getDunningHistory error:', err); res.status(500).json({ error: 'Failed to get dunning history' }); });
+};
+
+exports.getDunningConfig = (req, res) => {
+  if (!isPostgresEnabled || !req.user.society_id) {
+    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+  }
+  return withTenant(req.user.society_id, async (client) => {
+    await ensureDunningTables(client);
+    const r = await client.query('SELECT * FROM dunning_config LIMIT 1');
+    if (r.rows.length > 0) {
+      return res.json({ config: r.rows[0] });
+    }
+    // Create default config
+    const defaultConfig = {
+      id: uuidv4(),
+      grace_days: 5,
+      reminder_sequence: [3, 7, 15, 30],
+      interest_rate: 0,
+    };
+    await client.query(
+      'INSERT INTO dunning_config (id, grace_days, reminder_sequence, interest_rate) VALUES ($1, $2, $3, $4)',
+      [defaultConfig.id, defaultConfig.grace_days, JSON.stringify(defaultConfig.reminder_sequence), defaultConfig.interest_rate]
+    );
+    return res.json({ config: { ...defaultConfig, created_at: new Date().toISOString(), updated_at: new Date().toISOString() } });
+  }).catch((err) => { console.error('getDunningConfig error:', err); res.status(500).json({ error: 'Failed to get dunning config' }); });
+};
+
+exports.sendReminder = (req, res) => {
+  if (!isPostgresEnabled || !req.user.society_id) {
+    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+  }
+  return withTenant(req.user.society_id, async (client) => {
+    await ensureDunningTables(client);
+    const { bill_id, type } = req.body;
+    const reminderDate = new Date().toISOString().split('T')[0];
+    const validTypes = ['EMAIL', 'SMS', 'APP'];
+    const reminderType = validTypes.includes(type) ? type : 'APP';
+
+    // Get member_id from bill if not provided via bill lookup
+    let memberId = req.user.id;
+    if (bill_id) {
+      const billR = await client.query('SELECT member_id FROM bills WHERE id = $1 LIMIT 1', [bill_id]);
+      if (billR.rows.length > 0) memberId = billR.rows[0].member_id;
+    }
+
+    const record = {
+      id: uuidv4(),
+      member_id: memberId,
+      bill_id: bill_id || null,
+      reminder_date: reminderDate,
+      reminder_type: reminderType,
+      status: 'SENT',
+    };
+
+    await client.query(
+      'INSERT INTO dunning_history (id, member_id, bill_id, reminder_date, reminder_type, status) VALUES ($1, $2, $3, $4, $5, $6)',
+      [record.id, record.member_id, record.bill_id, record.reminder_date, record.reminder_type, record.status]
+    );
+    return res.status(201).json({ message: 'Reminder sent successfully', record });
+  }).catch((err) => { console.error('sendReminder error:', err); res.status(500).json({ error: 'Failed to send reminder' }); });
 };

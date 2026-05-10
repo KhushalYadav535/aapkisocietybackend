@@ -7,7 +7,7 @@ const path = require('path');
 require('dotenv').config();
 
 const { initializeDatabase } = require('./config/database');
-const { ensurePlatformSchema, isPostgresEnabled, isPostgresOnly, pool } = require('./config/postgres');
+const { ensurePlatformSchema, isPostgresEnabled, isPostgresOnly, pool, createTenantSchema } = require('./config/postgres');
 const authRoutes = require('./routes/auth.routes');
 const societyRoutes = require('./routes/society.routes');
 const memberRoutes = require('./routes/member.routes');
@@ -36,10 +36,15 @@ const vehicleRoutes = require('./routes/vehicle.routes');
 const vendorRoutes = require('./routes/vendor.routes');
 const messageRoutes = require('./routes/message.routes');
 const meetingRoutes = require('./routes/meeting.routes');
+const platformRoutes = require('./routes/platform.routes');
 const sosRoutes = require('./routes/sos.routes');
 const patrolRoutes = require('./routes/patrol.routes');
 const emergencyContactRoutes = require('./routes/emergency-contacts.routes');
 const assetRoutes = require('./routes/asset.routes');
+const propertyRoutes = require('./routes/property.routes');
+const scrollerRoutes = require('./routes/scroller.routes');
+const exportRoutes = require('./routes/export.routes');
+const { enforceSuspension } = require('./middleware/suspension');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -94,6 +99,15 @@ if (process.env.NODE_ENV === 'development') {
 // Static files
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
+// Suspension enforcement — blocks write operations for suspended/offboarded societies
+// Runs after all routes set req.user via per-route authenticate middleware
+// Uses optional chaining: no-ops for unauthenticated or platform admin requests
+app.use('/api', (req, res, next) => {
+  // Skip for auth routes (user not yet set)
+  if (req.path.startsWith('/auth')) return next();
+  enforceSuspension(req, res, next);
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/societies', societyRoutes);
@@ -123,10 +137,14 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/vendors', vendorRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/meetings', meetingRoutes);
+app.use('/api/platform', platformRoutes);
 app.use('/api/sos', sosRoutes);
 app.use('/api/patrol', patrolRoutes);
 app.use('/api/emergency-contacts', emergencyContactRoutes);
 app.use('/api/assets', assetRoutes);
+app.use('/api/properties', propertyRoutes);
+app.use('/api/scrollers', scrollerRoutes);
+app.use('/api/export', exportRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {
@@ -211,9 +229,20 @@ app.use((req, res) => {
 // Initialize database and start server
 initializeDatabase().then(() => {
   if (isPostgresEnabled) {
-    ensurePlatformSchema().catch((err) => {
-      console.error('Failed to prepare PostgreSQL schemas:', err.message);
-    });
+    ensurePlatformSchema()
+      .then(async () => {
+        // Provision tenant tables for all existing societies
+        try {
+          const res = await pool.query('SELECT id FROM platform.societies');
+          for (const row of res.rows) {
+            await createTenantSchema(row.id);
+          }
+          if (res.rows.length > 0) console.log(`✅ Ensured tenant tables for ${res.rows.length} societies`);
+        } catch (_) { /* societies table may not exist yet */ }
+      })
+      .catch((err) => {
+        console.error('Failed to prepare PostgreSQL schemas:', err.message);
+      });
   }
   app.listen(PORT, () => {
     console.log(`🏢 AapkiSociety Backend running on port ${PORT}`);

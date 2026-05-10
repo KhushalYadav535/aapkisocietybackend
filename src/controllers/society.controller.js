@@ -1,33 +1,10 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
-const { pool, isPostgresEnabled, createTenantSchema } = require('../config/postgres');
+const { pool, isPostgresEnabled, createTenantSchema, ensurePlatformSocietiesSchema } = require('../config/postgres');
 
 const ensureSocietyTables = async () => {
   if (!isPostgresEnabled) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS platform.societies (
-      id TEXT PRIMARY KEY,
-      name TEXT,
-      registration_number TEXT,
-      address TEXT,
-      city TEXT,
-      state TEXT,
-      pincode TEXT,
-      gst_number TEXT,
-      pan_number TEXT,
-      total_units INTEGER DEFAULT 0,
-      total_wings INTEGER DEFAULT 0,
-      status TEXT,
-      subscription_plan TEXT,
-      subscription_status TEXT,
-      active_modules JSONB DEFAULT '[]'::jsonb,
-      bank_name TEXT,
-      bank_account_number TEXT,
-      bank_ifsc TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  await ensurePlatformSocietiesSchema();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS platform.wings (
       id TEXT PRIMARY KEY,

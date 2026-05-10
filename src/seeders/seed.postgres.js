@@ -33,11 +33,23 @@ async function seed() {
       CREATE TABLE IF NOT EXISTS platform.societies (
         id TEXT PRIMARY KEY, name TEXT, registration_number TEXT,
         address TEXT, city TEXT, state TEXT, pincode TEXT,
-        gst_number TEXT, pan_number TEXT,
+        gst_number TEXT, pan_number TEXT, gst_status TEXT,
         total_units INTEGER DEFAULT 0, total_wings INTEGER DEFAULT 0,
-        status TEXT, subscription_plan TEXT, subscription_status TEXT,
-        active_modules JSONB DEFAULT '[]'::jsonb,
+        status TEXT DEFAULT 'PENDING',
+        subscription_plan TEXT DEFAULT 'CORE',
+        subscription_status TEXT DEFAULT 'REGISTRATION_FORM',
+        onboarding_state TEXT DEFAULT 'REGISTRATION_FORM',
+        verification_token TEXT,
+        kyc_documents JSONB DEFAULT '{}',
+        kyc_approved_by TEXT, kyc_approval_comment TEXT, kyc_approved_at TIMESTAMPTZ,
+        kyc_rejected_by TEXT, kyc_rejection_reason TEXT, kyc_rejected_at TIMESTAMPTZ,
+        reapplication_unlocked_at TIMESTAMPTZ,
+        active_modules JSONB DEFAULT '[]',
+        contact_name TEXT, contact_email TEXT, contact_phone TEXT,
         bank_name TEXT, bank_account_number TEXT, bank_ifsc TEXT,
+        renewal_date DATE,
+        subscription_action TEXT, subscription_action_reason TEXT,
+        subscription_action_by TEXT, subscription_action_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
@@ -56,6 +68,31 @@ async function seed() {
         flat_number TEXT, floor_number INTEGER, area_sqft NUMERIC,
         flat_type TEXT, is_occupied INTEGER DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS platform.notifications (
+        id TEXT PRIMARY KEY, title TEXT, message TEXT,
+        type TEXT DEFAULT 'SYSTEM',
+        target_type TEXT DEFAULT 'ALL',
+        target_id TEXT, target_society_id TEXT,
+        priority TEXT DEFAULT 'NORMAL',
+        action_url TEXT,
+        is_read INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS platform.scrollers (
+        id TEXT PRIMARY KEY, level TEXT DEFAULT 'PLATFORM',
+        message TEXT, urgency_level TEXT DEFAULT 'NORMAL',
+        start_at TIMESTAMPTZ, end_at TIMESTAMPTZ,
+        target_audience TEXT DEFAULT 'ALL',
+        created_by TEXT, impressions INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1,
+        created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 
@@ -85,13 +122,15 @@ async function seed() {
     // ─── 3. Society ──────────────────────────────────────────────────────────
     await client.query(`
       INSERT INTO platform.societies
-        (id,name,registration_number,address,city,state,pincode,total_units,total_wings,status,subscription_plan,subscription_status,active_modules,created_at,updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15)
+        (id,name,registration_number,address,city,state,pincode,total_units,total_wings,status,subscription_plan,subscription_status,onboarding_state,active_modules,gst_status,contact_name,contact_email,contact_phone,created_at,updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
     `, [
       societyId, 'Sunrise Heights CHS', 'MH/CHS/2024/1234',
       '123, MG Road, Andheri West', 'Mumbai', 'Maharashtra', '400053',
       120, 4, 'ACTIVE', 'AI_PRO', 'ACTIVE',
-      JSON.stringify(['MEMBERS', 'BILLING', 'NOTICES', 'COMPLAINTS', 'VISITORS', 'FACILITIES']),
+      'ACTIVE',
+      JSON.stringify(['MEMBERS', 'BILLING', 'NOTICES', 'COMPLAINTS', 'VISITORS', 'FACILITIES', 'PROPERTY_LISTINGS', 'SCRollER']),
+      'REGISTERED', 'Admin User', 'admin@sunrise.com', '9876543210',
       now, now
     ]);
     console.log('✅ Society created');

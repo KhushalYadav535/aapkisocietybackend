@@ -401,31 +401,362 @@ exports.getLedger = async (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureAccountingTables(client);
-        const { from, to } = req.query;
+        const { from, to, page = 1, limit = 50 } = req.query;
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+
+        // Get opening balance before the from date
+        let openingBalance = 0;
+        let params = [req.params.accountId];
+        let idx = 2;
+        let openingFilter = '';
+        if (from) {
+          openingFilter = ` AND le.entry_date < $${idx++}`;
+          params.push(from);
+        }
+        const { rows: openingRows } = await client.query(`
+          SELECT
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT' THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_entries le
+          JOIN vouchers v ON v.id = le.voucher_id AND v.status = 'APPROVED'
+          WHERE le.account_id = $1${openingFilter}
+        `, params);
+        openingBalance = parseFloat(openingRows[0].total_debit) - parseFloat(openingRows[0].total_credit);
+
+        // Fetch paginated ledger entries
         let q = `
-          SELECT le.*, v.voucher_number, v.voucher_type, v.narration AS voucher_narration, la.name AS account_name, la.code AS account_code
+          SELECT le.*, v.voucher_number, v.voucher_type, v.narration AS voucher_narration,
+                 la.name AS account_name, la.code AS account_code
           FROM ledger_entries le
           JOIN vouchers v ON v.id = le.voucher_id AND v.status = 'APPROVED'
           JOIN ledger_accounts la ON la.id = le.account_id
           WHERE le.account_id = $1
         `;
-        const params = [req.params.accountId];
-        let idx = 2;
+        params = [req.params.accountId];
+        idx = 2;
         if (from) { q += ` AND le.entry_date >= $${idx++}`; params.push(from); }
         if (to)   { q += ` AND le.entry_date <= $${idx++}`; params.push(to); }
-        q += ' ORDER BY le.entry_date ASC, le.created_at ASC';
+        q += ` ORDER BY le.entry_date ASC, le.created_at ASC LIMIT $${idx++} OFFSET $${idx++}`;
+        params.push(parseInt(limit), offset);
+
         const { rows } = await client.query(q, params);
-        // Running balance
-        let balance = 0;
+
+        // Get total count for pagination
+        let countParams = [req.params.accountId];
+        idx = 2;
+        let countFilter = '';
+        if (from) { countFilter += ` AND le.entry_date >= $${idx++}`; countParams.push(from); }
+        if (to)   { countFilter += ` AND le.entry_date <= $${idx++}`; countParams.push(to); }
+        const { rows: countRows } = await client.query(
+          `SELECT COUNT(*) AS total FROM ledger_entries le JOIN vouchers v ON v.id = le.voucher_id AND v.status = 'APPROVED' WHERE le.account_id = $1${countFilter}`,
+          countParams
+        );
+        const total = parseInt(countRows[0].total);
+
+        // Running balance (starts from opening balance)
+        let balance = openingBalance;
         const enriched = rows.map(r => {
           balance += r.entry_type === 'DEBIT' ? parseFloat(r.amount) : -parseFloat(r.amount);
           return { ...r, running_balance: balance };
         });
-        return res.json({ entries: enriched });
+
+        return res.json({
+          entries: enriched,
+          opening_balance: openingBalance,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total,
+            total_pages: Math.ceil(total / parseInt(limit))
+          }
+        });
       }).catch((e) => res.status(500).json({ error: e.message || 'Failed to fetch ledger' }));
     }
-    res.json({ entries: [] });
+    res.json({ entries: [], opening_balance: 0, pagination: { page: 1, limit: 50, total: 0, total_pages: 0 } });
   } catch (e) {
     res.status(500).json({ error: e.message || 'Failed to fetch ledger' });
+  }
+};
+
+// GET /api/accounting/income-statement
+exports.getIncomeStatement = async (req, res) => {
+  try {
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureAccountingTables(client);
+        await seedDefaultCOA(client);
+        const { start_date, end_date } = req.query;
+
+        const { rows } = await client.query(`
+          SELECT
+            la.id, la.code, la.name, la.sub_category,
+            la.opening_balance,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT'  THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_accounts la
+          LEFT JOIN ledger_entries le ON le.account_id = la.id
+            AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' AND voucher_date BETWEEN $1 AND $2)
+          WHERE la.is_active = TRUE AND la.sub_category = 'INCOME'
+          GROUP BY la.id, la.code, la.name, la.sub_category, la.opening_balance
+          ORDER BY la.code
+        `, [start_date || '1900-01-01', end_date || '2100-12-31']);
+
+        const expenseRows = await client.query(`
+          SELECT
+            la.id, la.code, la.name, la.sub_category,
+            la.opening_balance,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT'  THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_accounts la
+          LEFT JOIN ledger_entries le ON le.account_id = la.id
+            AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' AND voucher_date BETWEEN $1 AND $2)
+          WHERE la.is_active = TRUE AND la.sub_category = 'EXPENSE'
+          GROUP BY la.id, la.code, la.name, la.sub_category, la.opening_balance
+          ORDER BY la.code
+        `, [start_date || '1900-01-01', end_date || '2100-12-31']);
+
+        const income = rows.map(r => ({
+          account_name: r.name,
+          code: r.code,
+          amount: parseFloat(r.total_credit) - parseFloat(r.total_debit)
+        }));
+
+        const expenses = expenseRows.rows.map(r => ({
+          account_name: r.name,
+          code: r.code,
+          amount: parseFloat(r.total_debit) - parseFloat(r.total_credit)
+        }));
+
+        const total_income = income.reduce((s, i) => s + i.amount, 0);
+        const total_expenses = expenses.reduce((s, e) => s + e.amount, 0);
+        const net_result = total_income - total_expenses;
+
+        return res.json({
+          income,
+          expenses,
+          total_income,
+          total_expenses,
+          net_result,
+          period: { start_date, end_date }
+        });
+      }).catch((e) => res.status(500).json({ error: e.message || 'Failed to generate income statement' }));
+    }
+    res.json({ income: [], expenses: [], total_income: 0, total_expenses: 0, net_result: 0, period: { start_date: null, end_date: null } });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to generate income statement' });
+  }
+};
+
+// GET /api/accounting/balance-sheet
+exports.getBalanceSheet = async (req, res) => {
+  try {
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureAccountingTables(client);
+        await seedDefaultCOA(client);
+        const { as_on_date } = req.query;
+
+        const { rows: assetRows } = await client.query(`
+          SELECT
+            la.id, la.code, la.name, la.category,
+            la.opening_balance,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT'  THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_accounts la
+          LEFT JOIN ledger_entries le ON le.account_id = la.id
+            AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' AND voucher_date <= $1)
+          WHERE la.is_active = TRUE AND la.category = 'ASSET'
+          GROUP BY la.id, la.code, la.name, la.category, la.opening_balance
+          ORDER BY la.code
+        `, [as_on_date || new Date().toISOString().split('T')[0]]);
+
+        const { rows: liabilityRows } = await client.query(`
+          SELECT
+            la.id, la.code, la.name, la.category,
+            la.opening_balance,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT'  THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_accounts la
+          LEFT JOIN ledger_entries le ON le.account_id = la.id
+            AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' AND voucher_date <= $1)
+          WHERE la.is_active = TRUE AND la.category = 'LIABILITY'
+          GROUP BY la.id, la.code, la.name, la.category, la.opening_balance
+          ORDER BY la.code
+        `, [as_on_date || new Date().toISOString().split('T')[0]]);
+
+        const { rows: capitalRows } = await client.query(`
+          SELECT
+            la.id, la.code, la.name, la.category,
+            la.opening_balance,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT'  THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_accounts la
+          LEFT JOIN ledger_entries le ON le.account_id = la.id
+            AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' AND voucher_date <= $1)
+          WHERE la.is_active = TRUE AND la.category = 'CAPITAL'
+          GROUP BY la.id, la.code, la.name, la.category, la.opening_balance
+          ORDER BY la.code
+        `, [as_on_date || new Date().toISOString().split('T')[0]]);
+
+        const assets = assetRows.map(r => ({
+          name: r.name,
+          code: r.code,
+          amount: parseFloat(r.total_debit) - parseFloat(r.total_credit)
+        }));
+
+        const liabilities = liabilityRows.map(r => ({
+          name: r.name,
+          code: r.code,
+          amount: parseFloat(r.total_credit) - parseFloat(r.total_debit)
+        }));
+
+        const capital = capitalRows.map(r => ({
+          name: r.name,
+          code: r.code,
+          amount: parseFloat(r.total_credit) - parseFloat(r.total_debit)
+        }));
+
+        const total_assets = assets.reduce((s, a) => s + a.amount, 0);
+        const total_liabilities = liabilities.reduce((s, l) => s + l.amount, 0);
+        const total_capital = capital.reduce((s, c) => s + c.amount, 0);
+        const balanced = Math.abs(total_assets - (total_liabilities + total_capital)) < 0.01;
+
+        return res.json({
+          assets,
+          liabilities,
+          capital,
+          totals: {
+            assets: total_assets,
+            liabilities: total_liabilities,
+            capital: total_capital
+          },
+          balanced,
+          as_on_date: as_on_date || new Date().toISOString().split('T')[0]
+        });
+      }).catch((e) => res.status(500).json({ error: e.message || 'Failed to generate balance sheet' }));
+    }
+    res.json({ assets: [], liabilities: [], capital: [], totals: { assets: 0, liabilities: 0, capital: 0 }, balanced: true, as_on_date: null });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to generate balance sheet' });
+  }
+};
+
+// GET /api/accounting/bank-reconciliation
+exports.getBankReconciliationStatement = async (req, res) => {
+  try {
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureAccountingTables(client);
+        const { account_id, month, year, bank_statement_balance } = req.query;
+
+        if (!account_id || !month || !year) {
+          return res.status(400).json({ error: 'account_id, month, and year are required' });
+        }
+
+        const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+        const endDate = new Date(year, parseInt(month), 0).toISOString().split('T')[0];
+
+        // Get bank account ledger entries for the month
+        const { rows: ledgerEntries } = await client.query(`
+          SELECT le.*, v.voucher_number, v.narration AS voucher_narration
+          FROM ledger_entries le
+          JOIN vouchers v ON v.id = le.voucher_id AND v.status = 'APPROVED'
+          WHERE le.account_id = $1 AND le.entry_date BETWEEN $2 AND $3
+          ORDER BY le.entry_date ASC
+        `, [account_id, startDate, endDate]);
+
+        // Get opening balance (before start date)
+        const { rows: openingRows } = await client.query(`
+          SELECT
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT' THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_entries le
+          JOIN vouchers v ON v.id = le.voucher_id AND v.status = 'APPROVED'
+          WHERE le.account_id = $1 AND le.entry_date < $2
+        `, [account_id, startDate]);
+
+        const openingDebit = parseFloat(openingRows[0].total_debit);
+        const openingCredit = parseFloat(openingRows[0].total_credit);
+        let bank_balance_book = openingDebit - openingCredit;
+
+        let unpresented_cheques = [];
+        let uncredited_deposits = [];
+
+        // Identify unpresented cheques (credits from bank account - these are payments issued)
+        // and uncredited deposits (debits that may not have cleared)
+        for (const entry of ledgerEntries) {
+          const amount = parseFloat(entry.amount);
+          if (entry.entry_type === 'CREDIT') {
+            bank_balance_book += amount;
+          } else {
+            bank_balance_book -= amount;
+          }
+
+          // Check narration/comments for cheque/deposit indicators
+          const narration = (entry.voucher_narration || entry.narration || '').toLowerCase();
+          if (entry.entry_type === 'CREDIT' && (narration.includes('cheque') || narration.includes('payment') || narration.includes('issued'))) {
+            unpresented_cheques.push({
+              date: entry.entry_date,
+              amount,
+              payee: narration.replace(/cheque\s*/gi, '').trim() || 'Unknown'
+            });
+          }
+          if (entry.entry_type === 'DEBIT' && (narration.includes('deposit') || narration.includes('receipt') || narration.includes('received'))) {
+            uncredited_deposits.push({
+              date: entry.entry_date,
+              amount
+            });
+          }
+        }
+
+        // Get the closing balance from the bank account ledger
+        const { rows: closingRows } = await client.query(`
+          SELECT
+            COALESCE(SUM(CASE WHEN le.entry_type = 'DEBIT' THEN le.amount ELSE 0 END), 0) AS total_debit,
+            COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
+          FROM ledger_entries le
+          JOIN vouchers v ON v.id = le.voucher_id AND v.status = 'APPROVED'
+          WHERE le.account_id = $1 AND le.entry_date <= $2
+        `, [account_id, endDate]);
+
+        const closingDebit = parseFloat(closingRows[0].total_debit);
+        const closingCredit = parseFloat(closingRows[0].total_credit);
+        bank_balance_book = closingDebit - closingCredit;
+
+        const stmtBalance = parseFloat(bank_statement_balance) || closingDebit - closingCredit;
+        const unpresentedTotal = unpresented_cheques.reduce((s, c) => s + c.amount, 0);
+        const uncreditedTotal = uncredited_deposits.reduce((s, d) => s + d.amount, 0);
+
+        // Adjusted bank balance = Statement balance + unpresented cheques - uncredited deposits
+        const adjusted_bank_balance = stmtBalance + unpresentedTotal - uncreditedTotal;
+        const balanced = Math.abs(adjusted_bank_balance - bank_balance_book) < 0.01;
+
+        return res.json({
+          bank_balance_book,
+          bank_statement_balance: stmtBalance,
+          unpresented_cheques,
+          uncredited_deposits,
+          adjustments: {
+            added: unpresentedTotal,
+            omitted: uncreditedTotal
+          },
+          adjusted_bank_balance,
+          balanced,
+          period: { month: parseInt(month), year: parseInt(year) }
+        });
+      }).catch((e) => res.status(500).json({ error: e.message || 'Failed to generate bank reconciliation' }));
+    }
+    res.json({
+      bank_balance_book: 0,
+      bank_statement_balance: 0,
+      unpresented_cheques: [],
+      uncredited_deposits: [],
+      adjustments: { added: 0, omitted: 0 },
+      adjusted_bank_balance: 0,
+      balanced: true,
+      period: { month: null, year: null }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to generate bank reconciliation' });
   }
 };

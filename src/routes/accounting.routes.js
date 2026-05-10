@@ -20,5 +20,8 @@ router.get('/vouchers/:id/entries', ctrl.getVoucherEntries);
 // ── Reports ───────────────────────────────────────────────────────────────────
 router.get('/trial-balance', authorize('ADMIN', 'TREASURER', 'MAKER', 'CHECKER', 'COMMITTEE', 'AUDITOR'), ctrl.getTrialBalance);
 router.get('/ledger/:accountId', authorize('ADMIN', 'TREASURER', 'MAKER', 'CHECKER', 'COMMITTEE', 'AUDITOR'), ctrl.getLedger);
+router.get('/income-statement', authorize('ADMIN', 'TREASURER', 'COMMITTEE', 'AUDITOR'), ctrl.getIncomeStatement);
+router.get('/balance-sheet', authorize('ADMIN', 'TREASURER', 'COMMITTEE', 'AUDITOR'), ctrl.getBalanceSheet);
+router.get('/bank-reconciliation', authorize('ADMIN', 'TREASURER', 'AUDITOR'), ctrl.getBankReconciliationStatement);
 
 module.exports = router;

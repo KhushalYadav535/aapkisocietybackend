@@ -17,6 +17,7 @@ const ensurePlanTable = async () => {
     )
   `);
 };
+exports.ensurePlanTable = ensurePlanTable;
 
 exports.getAll = (req, res) => {
   try {
@@ -37,12 +38,30 @@ exports.getAll = (req, res) => {
 exports.create = (req, res) => {
   try {
     const { name, code, price, features, color } = req.body;
+    const normalizedCode = code != null ? String(code).trim().toUpperCase() : '';
+    if (!name || !normalizedCode) {
+      return res.status(400).json({ error: 'Name and plan code are required' });
+    }
+    let featureList = features;
+    if (typeof featureList === 'string') {
+      featureList = featureList.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    if (!Array.isArray(featureList)) featureList = [];
     if (isPostgresEnabled) {
       return ensurePlanTable().then(async () => {
-        const existing = await pool.query('SELECT id FROM platform.plans WHERE code = $1 LIMIT 1', [code]);
+        const existing = await pool.query('SELECT id FROM platform.plans WHERE UPPER(TRIM(code)) = $1 LIMIT 1', [normalizedCode]);
         if (existing.rows[0]) return res.status(400).json({ error: 'Plan code already exists' });
         const now = new Date().toISOString();
-        const plan = { id: uuidv4(), name, code, price: price || 0, features: features || [], color: color || 'bg-gray-100 text-gray-600', created_at: now, updated_at: now };
+        const plan = {
+          id: uuidv4(),
+          name: String(name).trim(),
+          code: normalizedCode,
+          price: price !== undefined && price !== '' ? Number(price) : 0,
+          features: featureList,
+          color: color || 'bg-gray-100 text-gray-600',
+          created_at: now,
+          updated_at: now
+        };
         await pool.query(
           `INSERT INTO platform.plans (id,name,code,price,features,color,created_at,updated_at)
            VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)`,
@@ -56,10 +75,10 @@ exports.create = (req, res) => {
     const now = new Date().toISOString();
     const plan = {
       id: uuidv4(),
-      name,
-      code,
-      price: price || 0,
-      features: features || [],
+      name: String(name).trim(),
+      code: normalizedCode,
+      price: price !== undefined && price !== '' ? Number(price) : 0,
+      features: featureList,
       color: color || 'bg-gray-100 text-gray-600',
       created_at: now,
       updated_at: now
@@ -75,6 +94,10 @@ exports.create = (req, res) => {
 exports.update = (req, res) => {
   try {
     const { name, price, features, color } = req.body;
+    let featurePayload = features;
+    if (typeof featurePayload === 'string') {
+      featurePayload = featurePayload.split(',').map((s) => s.trim()).filter(Boolean);
+    }
     if (isPostgresEnabled) {
       return ensurePlanTable().then(async () => {
         await pool.query(
@@ -85,14 +108,24 @@ exports.update = (req, res) => {
             color = COALESCE($4, color),
             updated_at = NOW()
           WHERE id = $5`,
-          [name ?? null, price ?? null, features !== undefined ? JSON.stringify(features) : null, color ?? null, req.params.id]
+          [
+            name ?? null,
+            price !== undefined && price !== '' ? Number(price) : null,
+            featurePayload !== undefined ? JSON.stringify(featurePayload) : null,
+            color ?? null,
+            req.params.id
+          ]
         );
         const r = await pool.query('SELECT * FROM platform.plans WHERE id = $1 LIMIT 1', [req.params.id]);
         return res.json({ plan: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to update plan' }));
     }
     const db = getDb();
-    const updates = { name, price, features, color, updated_at: new Date().toISOString() };
+    const updates = { updated_at: new Date().toISOString() };
+    if (name !== undefined) updates.name = name;
+    if (price !== undefined && price !== '') updates.price = Number(price);
+    if (featurePayload !== undefined) updates.features = featurePayload;
+    if (color !== undefined) updates.color = color;
     db.get('plans').find({ id: req.params.id }).assign(updates).write();
     const plan = db.get('plans').find({ id: req.params.id }).value();
     res.json({ plan });
