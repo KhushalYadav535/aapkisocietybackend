@@ -10,10 +10,10 @@ router.use(authenticate);
 
 router.get('/', facilityController.getAll);
 router.get('/:id', facilityController.getById);
-router.post('/', authorize('ADMIN'), [
+router.post('/', authorize('ADMIN', 'COMMITTEE', 'PLATFORM_ADMIN'), [
   body('name').trim().notEmpty().withMessage('Facility name required'),
 ], validate, facilityController.create);
-router.put('/:id', authorize('ADMIN'), facilityController.update);
+router.put('/:id', authorize('ADMIN', 'COMMITTEE', 'PLATFORM_ADMIN'), facilityController.update);
 
 router.get('/:id/bookings', facilityController.getBookings);
 router.post('/:id/book', [

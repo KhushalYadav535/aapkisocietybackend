@@ -27,6 +27,19 @@ const oauthRoutes = require('./routes/oauth.routes');
 const taxRoutes = require('./routes/tax.routes');
 const accountingRoutes = require('./routes/accounting.routes');
 const auditRoutes = require('./routes/audit.routes');
+const reportsRoutes = require('./routes/reports.routes');
+const staffRoutes = require('./routes/staff.routes');
+const documentRoutes = require('./routes/document.routes');
+const noticeReadRoutes = require('./routes/notice-read.routes');
+const tenantRoutes = require('./routes/tenant.routes');
+const vehicleRoutes = require('./routes/vehicle.routes');
+const vendorRoutes = require('./routes/vendor.routes');
+const messageRoutes = require('./routes/message.routes');
+const meetingRoutes = require('./routes/meeting.routes');
+const sosRoutes = require('./routes/sos.routes');
+const patrolRoutes = require('./routes/patrol.routes');
+const emergencyContactRoutes = require('./routes/emergency-contacts.routes');
+const assetRoutes = require('./routes/asset.routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -101,6 +114,19 @@ app.use('/api/oauth', oauthRoutes);
 app.use('/api/tax', taxRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/staff', staffRoutes);
+app.use('/api/documents', documentRoutes);
+app.use('/api/notice-reads', noticeReadRoutes);
+app.use('/api/tenants', tenantRoutes);
+app.use('/api/vehicles', vehicleRoutes);
+app.use('/api/vendors', vendorRoutes);
+app.use('/api/messages', messageRoutes);
+app.use('/api/meetings', meetingRoutes);
+app.use('/api/sos', sosRoutes);
+app.use('/api/patrol', patrolRoutes);
+app.use('/api/emergency-contacts', emergencyContactRoutes);
+app.use('/api/assets', assetRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {

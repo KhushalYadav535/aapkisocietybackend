@@ -75,10 +75,12 @@ exports.create = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureComplaintTable(client);
-        const { title, description, category, priority } = req.body;
+        const { title, description, category, priority, raised_by } = req.body;
+        // Admins can log complaints on behalf of residents, else self
+        const actualRaisedBy = (req.user.role !== 'RESIDENT' && raised_by) ? raised_by : req.user.id;
         const now = new Date().toISOString();
         const complaint = {
-          id: uuidv4(), society_id: req.user.society_id, raised_by: req.user.id,
+          id: uuidv4(), society_id: req.user.society_id, raised_by: actualRaisedBy,
           assigned_to: null, title, description: description || null,
           category: category || 'GENERAL', priority: priority || 'MEDIUM',
           status: 'OPEN', resolution_notes: null, resolved_at: null,
@@ -93,10 +95,11 @@ exports.create = (req, res) => {
       }).catch(() => res.status(500).json({ error: 'Failed to create complaint' }));
     }
     const db = getDb();
-    const { title, description, category, priority } = req.body;
+    const { title, description, category, priority, raised_by } = req.body;
+    const actualRaisedBy = (req.user.role !== 'RESIDENT' && raised_by) ? raised_by : req.user.id;
     const now = new Date().toISOString();
     const complaint = {
-      id: uuidv4(), society_id: req.user.society_id, raised_by: req.user.id,
+      id: uuidv4(), society_id: req.user.society_id, raised_by: actualRaisedBy,
       assigned_to: null, title, description: description || null,
       category: category || 'GENERAL', priority: priority || 'MEDIUM',
       status: 'OPEN', resolution_notes: null, resolved_at: null,

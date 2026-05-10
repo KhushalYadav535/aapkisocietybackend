@@ -30,6 +30,7 @@ function getDb() {
       payments: [],
       complaints: [],
       notices: [],
+      notice_reads: [],
       visitors: [],
       facilities: [],
       facility_bookings: [],
@@ -45,6 +46,28 @@ function getDb() {
       gst_returns: [],
       tds_returns: [],
       consent_logs: [],
+      // Missing collections that were causing silent failures
+      vehicles: [],
+      parking_slots: [],
+      staff: [],
+      staff_attendance: [],
+      tenants: [],
+      vendors: [],
+      vendor_payments: [],
+      meetings: [],
+      meeting_votes: [],
+      messages: [],
+      documents: [],
+      document_categories: [],
+      accounting_entries: [],
+      accounting_categories: [],
+      // New feature collections
+      sos_alerts: [],
+      patrol_checkpoints: [],
+      patrol_logs: [],
+      emergency_contacts: [],
+      assets: [],
+      asset_service_logs: [],
     }).write();
   }
   return db;
