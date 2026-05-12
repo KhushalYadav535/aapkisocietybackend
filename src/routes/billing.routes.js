@@ -37,5 +37,33 @@ router.get('/dunning-history', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN')
 router.get('/dunning-config', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.getDunningConfig);
 router.post('/send-reminder', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.sendReminder);
 
+// Billing Heads CRUD
+router.get('/heads', billingController.getAllBillingHeads);
+router.get('/heads/:id', billingController.getBillingHeadById);
+router.post('/heads', authorize('ADMIN', 'TREASURER', 'MAKER', 'PLATFORM_ADMIN'), [
+  body('name').notEmpty().withMessage('Name is required'),
+], validate, billingController.createBillingHead);
+router.put('/heads/:id', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.updateBillingHead);
+router.delete('/heads/:id', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.deleteBillingHead);
+
+// Duplicate bill prevention
+router.post('/check-duplicate', billingController.checkDuplicateBill);
+
+// Generate bills with billing heads
+router.post('/generate-bulk', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.generateBulkBillsWithHeads);
+router.post('/generate-with-heads', authorize('ADMIN', 'TREASURER', 'MAKER', 'PLATFORM_ADMIN'), billingController.createBillWithHeads);
+
+// Arrears from ledger
+router.get('/member-arrears/:member_id', billingController.getMemberArrears);
+router.get('/arrears-summary', billingController.getArrearsSummaryFromLedger);
+
+// Export functionality
+router.get('/export/excel', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.exportBillsExcel);
+router.get('/export/arrears-excel', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.exportArrearsExcel);
+router.get('/export/pdf', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.exportBillsPDFReport);
+
+// Bill PDF generation
+router.get('/bills/:id/pdf', billingController.generateBillPDF);
+
 module.exports = router;
 
