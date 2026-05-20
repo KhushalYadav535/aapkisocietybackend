@@ -20,6 +20,7 @@ router.post('/', authorize('PLATFORM_ADMIN', 'ADMIN'), [
 ], validate, societyController.create);
 
 router.get('/', societyController.getAll);
+router.get('/masters/home-types', societyController.getHomeTypeMasters);
 router.get('/:id', societyController.getById);
 router.put('/:id', authorize('PLATFORM_ADMIN', 'ADMIN'), societyController.update);
 router.get('/:id/wings', societyController.getWings);

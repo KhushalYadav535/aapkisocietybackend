@@ -68,6 +68,12 @@ function getDb() {
       emergency_contacts: [],
       assets: [],
       asset_service_logs: [],
+      // Home Type Masters
+      unit_category_master: [],
+      unit_type_master: [],
+      unit_subtype_master: [],
+      occupancy_type_master: [],
+      ownership_type_master: [],
     }).write();
   }
   return db;

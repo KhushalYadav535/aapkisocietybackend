@@ -28,6 +28,82 @@ const ensureSocietyTables = async () => {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  
+  // New Master Tables
+  await pool.query(`CREATE TABLE IF NOT EXISTS platform.unit_category_master (id TEXT PRIMARY KEY, name TEXT UNIQUE)`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS platform.unit_type_master (id TEXT PRIMARY KEY, category_id TEXT, name TEXT UNIQUE, notes TEXT)`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS platform.unit_subtype_master (id TEXT PRIMARY KEY, name TEXT UNIQUE, notes TEXT)`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS platform.occupancy_type_master (id TEXT PRIMARY KEY, name TEXT UNIQUE, why_important TEXT)`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS platform.ownership_type_master (id TEXT PRIMARY KEY, name TEXT UNIQUE)`);
+  
+  // Alter flats table to include new attributes
+  const alters = [
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS unit_category TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS unit_subtype TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS occupancy_type TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS ownership_type TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS rera_unit_id TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS super_builtup_area NUMERIC`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS carpet_area NUMERIC`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS uds_sqft NUMERIC`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS maintenance_slab TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS vastu_facing TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS meter_numbers TEXT`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS gst_applicable INTEGER DEFAULT 0`,
+    `ALTER TABLE platform.flats ADD COLUMN IF NOT EXISTS occupancy_certificate_status TEXT`
+  ];
+  for (const sql of alters) {
+    try { await pool.query(sql); } catch(e) { }
+  }
+
+  // Auto-seed masters if empty
+  try {
+    const countRes = await pool.query('SELECT count(*) as count FROM platform.unit_category_master');
+    if (parseInt(countRes.rows[0].count) === 0) {
+      await seedMasters(pool);
+    }
+  } catch (e) { console.error('Error auto-seeding masters', e); }
+};
+
+const seedMasters = async (client) => {
+  const categories = ['Residential', 'Commercial', 'Plot', 'Mixed Use'];
+  for (const cat of categories) {
+    await client.query(`INSERT INTO platform.unit_category_master (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [uuidv4(), cat]);
+  }
+  const types = [
+    { cat: 'Residential', name: '1 RK', notes: 'Room + Kitchen' },
+    { cat: 'Residential', name: 'Studio Apartment', notes: 'Single-room compact unit' },
+    { cat: 'Residential', name: '1 BHK', notes: 'Bedroom-Hall-Kitchen' },
+    { cat: 'Residential', name: '2 BHK', notes: 'Most common urban format' },
+    { cat: 'Residential', name: '3 BHK', notes: 'Premium standard' },
+    { cat: 'Residential', name: 'Penthouse', notes: 'Top-floor luxury' },
+    { cat: 'Residential', name: 'Villa', notes: 'Premium standalone' },
+    { cat: 'Residential', name: 'Row House', notes: 'Connected side walls' },
+    { cat: 'Commercial', name: 'Shop', notes: 'Retail' },
+    { cat: 'Commercial', name: 'Office Unit', notes: 'Office' }
+  ];
+  for (const t of types) {
+    await client.query(`INSERT INTO platform.unit_type_master (id, category_id, name, notes) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`, [uuidv4(), t.cat, t.name, t.notes]);
+  }
+  const subtypes = [
+    { name: 'Standard', notes: 'Default' }, { name: 'Duplex', notes: 'Two floors' }, { name: 'Triplex', notes: 'Three floors' },
+    { name: 'Premium', notes: 'Premium features' }, { name: 'Corner', notes: 'Corner layout' }, { name: 'Garden Facing', notes: 'Faces garden' },
+    { name: 'Unit with Covered Parking', notes: 'Parking linked' }, { name: 'Unit with Open Parking', notes: 'Parking linked' }
+  ];
+  for (const s of subtypes) {
+    await client.query(`INSERT INTO platform.unit_subtype_master (id, name, notes) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [uuidv4(), s.name, s.notes]);
+  }
+  const occupancies = [
+    { name: 'Owner Occupied', why: 'Resident owner' }, { name: 'Tenant Occupied', why: 'Rental tracking' },
+    { name: 'Vacant Unit', why: 'Maintenance handling' }, { name: 'Corporate Lease', why: 'Company rented' }
+  ];
+  for (const o of occupancies) {
+    await client.query(`INSERT INTO platform.occupancy_type_master (id, name, why_important) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [uuidv4(), o.name, o.why]);
+  }
+  const ownerships = ['Freehold', 'Leasehold', 'Cooperative Society Ownership', 'Condominium Ownership', 'Joint Ownership'];
+  for (const o of ownerships) {
+    await client.query(`INSERT INTO platform.ownership_type_master (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [uuidv4(), o]);
+  }
 };
 
 exports.create = (req, res) => {
@@ -218,21 +294,35 @@ exports.getFlats = (req, res) => {
 
 exports.addFlat = (req, res) => {
   try {
+    const data = req.body;
+    const flat = { 
+      id: uuidv4(), society_id: req.params.id, wing_id: data.wing_id || null, 
+      flat_number: data.flat_number, floor_number: data.floor_number || null, 
+      area_sqft: data.area_sqft || data.super_builtup_area || data.carpet_area || null, 
+      flat_type: data.flat_type || null, is_occupied: 0, created_at: new Date().toISOString(),
+      unit_category: data.unit_category || null, unit_subtype: data.unit_subtype || null,
+      occupancy_type: data.occupancy_type || null, ownership_type: data.ownership_type || null,
+      rera_unit_id: data.rera_unit_id || null, super_builtup_area: data.super_builtup_area || null,
+      carpet_area: data.carpet_area || null, uds_sqft: data.uds_sqft || null,
+      maintenance_slab: data.maintenance_slab || null, vastu_facing: data.vastu_facing || null,
+      meter_numbers: data.meter_numbers || null, gst_applicable: data.gst_applicable ? 1 : 0,
+      occupancy_certificate_status: data.occupancy_certificate_status || null
+    };
+
     if (isPostgresEnabled) {
       return ensureSocietyTables().then(async () => {
-        const { flat_number, wing_id, floor_number, area_sqft, flat_type } = req.body;
-        const flat = { id: uuidv4(), society_id: req.params.id, wing_id: wing_id || null, flat_number, floor_number: floor_number || null, area_sqft: area_sqft || null, flat_type: flat_type || null, is_occupied: 0, created_at: new Date().toISOString() };
         await pool.query(
-          `INSERT INTO platform.flats (id,society_id,wing_id,flat_number,floor_number,area_sqft,flat_type,is_occupied,created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [flat.id, flat.society_id, flat.wing_id, flat.flat_number, flat.floor_number, flat.area_sqft, flat.flat_type, flat.is_occupied, flat.created_at]
+          `INSERT INTO platform.flats (id,society_id,wing_id,flat_number,floor_number,area_sqft,flat_type,is_occupied,created_at,unit_category,unit_subtype,occupancy_type,ownership_type,rera_unit_id,super_builtup_area,carpet_area,uds_sqft,maintenance_slab,vastu_facing,meter_numbers,gst_applicable,occupancy_certificate_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+          [flat.id, flat.society_id, flat.wing_id, flat.flat_number, flat.floor_number, flat.area_sqft, flat.flat_type, flat.is_occupied, flat.created_at, flat.unit_category, flat.unit_subtype, flat.occupancy_type, flat.ownership_type, flat.rera_unit_id, flat.super_builtup_area, flat.carpet_area, flat.uds_sqft, flat.maintenance_slab, flat.vastu_facing, flat.meter_numbers, flat.gst_applicable, flat.occupancy_certificate_status]
         );
         return res.status(201).json({ flat });
-      }).catch(() => res.status(500).json({ error: 'Failed to add flat' }));
+      }).catch((e) => {
+        console.error(e);
+        res.status(500).json({ error: 'Failed to add flat' });
+      });
     }
     const db = getDb();
-    const { flat_number, wing_id, floor_number, area_sqft, flat_type } = req.body;
-    const flat = { id: uuidv4(), society_id: req.params.id, wing_id: wing_id || null, flat_number, floor_number: floor_number || null, area_sqft: area_sqft || null, flat_type: flat_type || null, is_occupied: 0, created_at: new Date().toISOString() };
     db.get('flats').push(flat).write();
     res.status(201).json({ flat });
   } catch (error) {
@@ -285,5 +375,74 @@ exports.deleteSociety = (req, res) => {
     res.json({ message: 'Society deleted permanently' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete society' });
+  }
+};
+
+exports.getHomeTypeMasters = async (req, res) => {
+  try {
+    if (isPostgresEnabled) {
+      return ensureSocietyTables().then(async () => {
+        const catRes = await pool.query('SELECT * FROM platform.unit_category_master');
+        const typeRes = await pool.query('SELECT * FROM platform.unit_type_master');
+        const subtypeRes = await pool.query('SELECT * FROM platform.unit_subtype_master');
+        const occRes = await pool.query('SELECT * FROM platform.occupancy_type_master');
+        const ownRes = await pool.query('SELECT * FROM platform.ownership_type_master');
+        
+        return res.json({
+          unit_category_master: catRes.rows,
+          unit_type_master: typeRes.rows,
+          unit_subtype_master: subtypeRes.rows,
+          occupancy_type_master: occRes.rows,
+          ownership_type_master: ownRes.rows
+        });
+      }).catch(() => res.status(500).json({ error: 'Failed to fetch home type masters' }));
+    }
+    const db = getDb();
+    
+    // Seed lowdb if empty
+    if (db.get('unit_category_master').value() && db.get('unit_category_master').value().length === 0) {
+      const categories = ['Residential', 'Commercial', 'Plot', 'Mixed Use'];
+      for (const cat of categories) db.get('unit_category_master').push({ id: uuidv4(), name: cat }).write();
+      
+      const types = [
+        { cat: 'Residential', name: '1 RK', notes: 'Room + Kitchen' },
+        { cat: 'Residential', name: 'Studio Apartment', notes: 'Single-room compact unit' },
+        { cat: 'Residential', name: '1 BHK', notes: 'Bedroom-Hall-Kitchen' },
+        { cat: 'Residential', name: '2 BHK', notes: 'Most common urban format' },
+        { cat: 'Residential', name: '3 BHK', notes: 'Premium standard' },
+        { cat: 'Residential', name: 'Penthouse', notes: 'Top-floor luxury' },
+        { cat: 'Residential', name: 'Villa', notes: 'Premium standalone' },
+        { cat: 'Residential', name: 'Row House', notes: 'Connected side walls' },
+        { cat: 'Commercial', name: 'Shop', notes: 'Retail' },
+        { cat: 'Commercial', name: 'Office Unit', notes: 'Office' }
+      ];
+      for (const t of types) db.get('unit_type_master').push({ id: uuidv4(), category_id: t.cat, name: t.name, notes: t.notes }).write();
+      
+      const subtypes = [
+        { name: 'Standard', notes: 'Default' }, { name: 'Duplex', notes: 'Two floors' }, { name: 'Triplex', notes: 'Three floors' },
+        { name: 'Premium', notes: 'Premium features' }, { name: 'Corner', notes: 'Corner layout' }, { name: 'Garden Facing', notes: 'Faces garden' },
+        { name: 'Unit with Covered Parking', notes: 'Parking linked' }, { name: 'Unit with Open Parking', notes: 'Parking linked' }
+      ];
+      for (const s of subtypes) db.get('unit_subtype_master').push({ id: uuidv4(), name: s.name, notes: s.notes }).write();
+      
+      const occupancies = [
+        { name: 'Owner Occupied', why: 'Resident owner' }, { name: 'Tenant Occupied', why: 'Rental tracking' },
+        { name: 'Vacant Unit', why: 'Maintenance handling' }, { name: 'Corporate Lease', why: 'Company rented' }
+      ];
+      for (const o of occupancies) db.get('occupancy_type_master').push({ id: uuidv4(), name: o.name, why_important: o.why }).write();
+      
+      const ownerships = ['Freehold', 'Leasehold', 'Cooperative Society Ownership', 'Condominium Ownership', 'Joint Ownership'];
+      for (const o of ownerships) db.get('ownership_type_master').push({ id: uuidv4(), name: o }).write();
+    }
+
+    return res.json({
+      unit_category_master: db.get('unit_category_master').value() || [],
+      unit_type_master: db.get('unit_type_master').value() || [],
+      unit_subtype_master: db.get('unit_subtype_master').value() || [],
+      occupancy_type_master: db.get('occupancy_type_master').value() || [],
+      ownership_type_master: db.get('ownership_type_master').value() || []
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch home type masters' });
   }
 };
