@@ -50,6 +50,11 @@ const { enforceSuspension } = require('./middleware/suspension');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Trust the first reverse proxy hop (required on Render, Railway, Heroku, etc.)
+// Without this, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+// because X-Forwarded-For is set by the platform proxy but Express doesn't trust it.
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 app.use(cors({
