@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 require('dotenv').config();
@@ -66,6 +67,9 @@ app.use(cors({
   },
   credentials: true
 }));
+
+// Gzip compression — reduces JSON response payload by 60–80%
+app.use(compression());
 
 // Rate limiting
 const isDev = process.env.NODE_ENV === 'development';

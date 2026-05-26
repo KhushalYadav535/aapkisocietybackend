@@ -190,18 +190,49 @@ exports.getCollectionSummary = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         const isResident = req.user.role === 'RESIDENT';
-        const promises = [];
+        // Single query: aggregate all 6 months at once via GROUP BY
+        const since = new Date();
+        since.setMonth(since.getMonth() - 5);
+        since.setDate(1);
+        since.setHours(0, 0, 0, 0);
+
+        const r = isResident
+          ? await client.query(
+              `SELECT EXTRACT(YEAR FROM payment_date)::int AS yr,
+                      EXTRACT(MONTH FROM payment_date)::int AS mo,
+                      COALESCE(SUM(amount),0) AS s
+               FROM payments
+               WHERE status = 'SUCCESS'
+                 AND member_id = $1
+                 AND payment_date >= $2
+               GROUP BY yr, mo`,
+              [req.user.id, since.toISOString()]
+            )
+          : await client.query(
+              `SELECT EXTRACT(YEAR FROM payment_date)::int AS yr,
+                      EXTRACT(MONTH FROM payment_date)::int AS mo,
+                      COALESCE(SUM(amount),0) AS s
+               FROM payments
+               WHERE status = 'SUCCESS'
+                 AND payment_date >= $1
+               GROUP BY yr, mo`,
+              [since.toISOString()]
+            );
+
+        // Build a lookup map: "YYYY-M" -> total
+        const lookup = new Map();
+        for (const row of r.rows) {
+          lookup.set(`${row.yr}-${row.mo}`, Number(row.s));
+        }
+
+        // Fill in all 6 months (0 if no data for that month)
+        const months = [];
         for (let i = 5; i >= 0; i--) {
           const d = new Date();
           d.setMonth(d.getMonth() - i);
-          const year = d.getFullYear();
-          const month = d.getMonth() + 1;
-          const p = isResident
-            ? client.query('SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = $1 AND member_id = $2 AND EXTRACT(YEAR FROM payment_date) = $3 AND EXTRACT(MONTH FROM payment_date) = $4', ['SUCCESS', req.user.id, year, month]).then(r => ({ month: i, total: Number(r.rows[0]?.s || 0) }))
-            : client.query('SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = $1 AND EXTRACT(YEAR FROM payment_date) = $2 AND EXTRACT(MONTH FROM payment_date) = $3', ['SUCCESS', year, month]).then(r => ({ month: i, total: Number(r.rows[0]?.s || 0) }));
-          promises.push(p);
+          const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+          months.push({ month: i, total: lookup.get(key) || 0 });
         }
-        const months = await Promise.all(promises);
         return res.json({ collection_summary: months });
       }).catch(() => res.status(500).json({ error: 'Failed to fetch collection summary' }));
     }
