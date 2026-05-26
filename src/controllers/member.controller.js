@@ -8,17 +8,32 @@ const safeUser = (u) => ({ id: u.id, email: u.email, first_name: u.first_name, l
 
 exports.getAll = (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = (page - 1) * limit;
+
     if (isPostgresEnabled) {
-      return ensurePlatformSchema().then(async () => {
-        let query = 'SELECT * FROM platform.users ORDER BY created_at DESC';
-        let params = [];
+      return (async () => {
+        const cols = 'id,email,first_name,last_name,phone,role,society_id,flat_number,wing,is_active,created_at';
+        let query, countQuery, params, countParams;
         if (req.user.role !== 'PLATFORM_ADMIN') {
-          query = 'SELECT * FROM platform.users WHERE society_id = $1 ORDER BY flat_number ASC';
-          params = [req.user.society_id];
+          query = `SELECT ${cols} FROM platform.users WHERE society_id = $1 ORDER BY flat_number ASC LIMIT $2 OFFSET $3`;
+          countQuery = 'SELECT COUNT(*)::int AS total FROM platform.users WHERE society_id = $1';
+          params = [req.user.society_id, limit, offset];
+          countParams = [req.user.society_id];
+        } else {
+          query = `SELECT ${cols} FROM platform.users ORDER BY created_at DESC LIMIT $1 OFFSET $2`;
+          countQuery = 'SELECT COUNT(*)::int AS total FROM platform.users';
+          params = [limit, offset];
+          countParams = [];
         }
-        const r = await pool.query(query, params);
-        return res.json({ members: r.rows.map(safeUser) });
-      }).catch(() => res.status(500).json({ error: 'Failed to fetch members' }));
+        const [r, cR] = await Promise.all([
+          pool.query(query, params),
+          pool.query(countQuery, countParams)
+        ]);
+        const total = cR.rows[0]?.total || 0;
+        return res.json({ members: r.rows.map(safeUser), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+      })().catch(() => res.status(500).json({ error: 'Failed to fetch members' }));
     }
     const db = getDb();
     let members;
@@ -27,7 +42,9 @@ exports.getAll = (req, res) => {
     } else {
       members = db.get('users').filter({ society_id: req.user.society_id }).sortBy('flat_number').value().map(safeUser);
     }
-    res.json({ members });
+    const total = members.length;
+    const paginated = members.slice(offset, offset + limit);
+    res.json({ members: paginated, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch members' });
   }
@@ -36,12 +53,12 @@ exports.getAll = (req, res) => {
 exports.getById = (req, res) => {
   try {
     if (isPostgresEnabled) {
-      return ensurePlatformSchema().then(async () => {
+      return (async () => {
         const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.params.id]);
         const member = r.rows[0];
         if (!member) return res.status(404).json({ error: 'Member not found' });
         return res.json({ member: safeUser(member) });
-      }).catch(() => res.status(500).json({ error: 'Failed to fetch member' }));
+      })().catch(() => res.status(500).json({ error: 'Failed to fetch member' }));
     }
     const db = getDb();
     const member = db.get('users').find({ id: req.params.id }).value();
@@ -60,7 +77,6 @@ exports.create = async (req, res) => {
       return res.status(403).json({ error: `You cannot assign role: ${normalizedRole}` });
     }
     if (isPostgresEnabled) {
-      await ensurePlatformSchema();
       const r = await pool.query('SELECT id FROM platform.users WHERE email = $1 LIMIT 1', [email]);
       if (r.rows[0]) return res.status(409).json({ error: 'Email already registered' });
     } else {
@@ -112,7 +128,7 @@ exports.update = (req, res) => {
     }
 
     if (isPostgresEnabled) {
-      return ensurePlatformSchema().then(async () => {
+      return (async () => {
         const fields = ['first_name', 'last_name', 'phone', 'role', 'flat_number', 'wing'];
         const setParts = [];
         const values = [];
@@ -127,7 +143,7 @@ exports.update = (req, res) => {
         await pool.query(`UPDATE platform.users SET ${setClause} WHERE id = $${values.length}`, values);
         const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.params.id]);
         return res.json({ member: safeUser(r.rows[0]) });
-      }).catch(() => res.status(500).json({ error: 'Failed to update member' }));
+      })().catch(() => res.status(500).json({ error: 'Failed to update member' }));
     }
     const db = getDb();
     const updates = {};
@@ -144,10 +160,10 @@ exports.update = (req, res) => {
 exports.deactivate = (req, res) => {
   try {
     if (isPostgresEnabled) {
-      return ensurePlatformSchema().then(async () => {
+      return (async () => {
         await pool.query('UPDATE platform.users SET is_active = 0, updated_at = NOW() WHERE id = $1', [req.params.id]);
         return res.json({ message: 'Member deactivated successfully' });
-      }).catch(() => res.status(500).json({ error: 'Failed to deactivate member' }));
+      })().catch(() => res.status(500).json({ error: 'Failed to deactivate member' }));
     }
     const db = getDb();
     db.get('users').find({ id: req.params.id }).assign({ is_active: 0, updated_at: new Date().toISOString() }).write();

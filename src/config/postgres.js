@@ -10,7 +10,21 @@ const getTenantSchemaName = (tenantId) => `society_${String(tenantId).replace(/-
  * Ensures platform.societies matches what platform/society flows expect.
  * Older deployments only had a minimal table from society.controller; ALTER adds missing columns.
  */
+// ─── Schema-init caching ────────────────────────────────────────────────────
+// CREATE TABLE IF NOT EXISTS + ALTER TABLE queries are expensive (~200-600ms).
+// They only need to run once per process boot; afterwards the result is cached.
+let _societiesSchemaReady = false;
+let _societiesSchemaPromise = null;
+
 const ensurePlatformSocietiesSchema = async () => {
+  if (!pool) return;
+  if (_societiesSchemaReady) return;
+  if (_societiesSchemaPromise) return _societiesSchemaPromise;
+  _societiesSchemaPromise = _doEnsurePlatformSocietiesSchema().then(() => { _societiesSchemaReady = true; });
+  return _societiesSchemaPromise;
+};
+
+const _doEnsurePlatformSocietiesSchema = async () => {
   if (!pool) return;
   await pool.query('CREATE SCHEMA IF NOT EXISTS platform');
   await pool.query(`
@@ -103,7 +117,18 @@ const ensurePlatformSocietiesSchema = async () => {
   }
 };
 
+let _platformSchemaReady = false;
+let _platformSchemaPromise = null;
+
 const ensurePlatformSchema = async () => {
+  if (!pool) return;
+  if (_platformSchemaReady) return;
+  if (_platformSchemaPromise) return _platformSchemaPromise;
+  _platformSchemaPromise = _doEnsurePlatformSchema().then(() => { _platformSchemaReady = true; });
+  return _platformSchemaPromise;
+};
+
+const _doEnsurePlatformSchema = async () => {
   if (!pool) return;
   await pool.query('CREATE SCHEMA IF NOT EXISTS platform');
   await pool.query(`

@@ -5,7 +5,7 @@ exports.getStats = (req, res) => {
   try {
     // Platform admin: platform-level overview (no tenant schema)
     if (isPostgresEnabled && req.user.role === 'PLATFORM_ADMIN') {
-      return ensurePlatformSchema().then(async () => {
+      return (async () => {
         const [usersR] = await Promise.all([
           pool.query('SELECT COUNT(*)::int AS c FROM platform.users WHERE is_active = 1')
         ]);
@@ -21,7 +21,7 @@ exports.getStats = (req, res) => {
             active_notices: 0,
           }
         });
-      }).catch(() => res.status(500).json({ error: 'Failed to fetch stats' }));
+      })().catch(() => res.status(500).json({ error: 'Failed to fetch stats' }));
     }
 
     if (isPostgresEnabled && req.user.society_id) {

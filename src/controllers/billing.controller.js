@@ -5,8 +5,29 @@ const PDFDocument = require('pdfkit');
 const XLSX = require('xlsx');
 
 const _tenantBillingInitLocks = new Map();
+const _tenantBillingReady = new Set();
 
 const ensureTenantBillingTables = async (client) => {
+  // Derive a cache key from the search_path already set by withTenant()
+  const spRes = await client.query('SHOW search_path');
+  const schemaKey = (spRes.rows[0]?.search_path || 'default').split(',')[0].trim().replace(/"/g, '');
+  if (_tenantBillingReady.has(schemaKey)) return;
+
+  // Prevent concurrent CREATE TABLE races for the same tenant
+  if (_tenantBillingInitLocks.has(schemaKey)) return _tenantBillingInitLocks.get(schemaKey);
+
+  const initPromise = _doEnsureTenantBillingTables(client).then(() => {
+    _tenantBillingReady.add(schemaKey);
+    _tenantBillingInitLocks.delete(schemaKey);
+  }).catch((err) => {
+    _tenantBillingInitLocks.delete(schemaKey);
+    throw err;
+  });
+  _tenantBillingInitLocks.set(schemaKey, initPromise);
+  return initPromise;
+};
+
+const _doEnsureTenantBillingTables = async (client) => {
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS billing_heads (
@@ -87,17 +108,32 @@ const ensureTenantBillingTables = async (client) => {
 
 exports.getAllBills = (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = (page - 1) * limit;
+
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureTenantBillingTables(client);
-        let query = 'SELECT * FROM bills ORDER BY created_at DESC';
-        let params = [];
+        const cols = 'id,bill_number,member_id,flat_id,amount,tax_amount,total_amount,paid_amount,status,bill_type,billing_period,due_date,bill_date,description,created_by,approved_by,created_at';
+        let query, countQuery, params, countParams;
         if (req.user.role === 'RESIDENT') {
-          query = 'SELECT * FROM bills WHERE member_id = $1 ORDER BY created_at DESC';
-          params = [req.user.id];
+          query = `SELECT ${cols} FROM bills WHERE member_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`;
+          countQuery = 'SELECT COUNT(*)::int AS total FROM bills WHERE member_id = $1';
+          params = [req.user.id, limit, offset];
+          countParams = [req.user.id];
+        } else {
+          query = `SELECT ${cols} FROM bills ORDER BY created_at DESC LIMIT $1 OFFSET $2`;
+          countQuery = 'SELECT COUNT(*)::int AS total FROM bills';
+          params = [limit, offset];
+          countParams = [];
         }
-        const r = await client.query(query, params);
-        return res.json({ bills: r.rows });
+        const [r, cR] = await Promise.all([
+          client.query(query, params),
+          client.query(countQuery, countParams)
+        ]);
+        const total = cR.rows[0]?.total || 0;
+        return res.json({ bills: r.rows, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
       }).catch((err) => { console.error('Billing error:', err); return res.status(500).json({ error: 'Failed to process request' }); });
     }
     const db = getDb();
@@ -109,7 +145,10 @@ exports.getAllBills = (req, res) => {
     } else {
       bills = db.get('bills').filter({ society_id: req.user.society_id }).sortBy('created_at').reverse().value();
     }
-    res.json({ bills });
+    // Client-side pagination for LowDB
+    const total = bills.length;
+    const paginatedBills = bills.slice(offset, offset + limit);
+    res.json({ bills: paginatedBills, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch bills' });
   }
@@ -294,17 +333,32 @@ exports.generateMonthlyBills = (req, res) => {
 
 exports.getPayments = (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = (page - 1) * limit;
+
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureTenantBillingTables(client);
-        let query = 'SELECT * FROM payments ORDER BY payment_date DESC';
-        let params = [];
+        const cols = 'id,bill_id,member_id,amount,payment_method,payment_reference,status,payment_date,created_at';
+        let query, countQuery, params, countParams;
         if (req.user.role === 'RESIDENT') {
-          query = 'SELECT * FROM payments WHERE member_id = $1 ORDER BY payment_date DESC';
-          params = [req.user.id];
+          query = `SELECT ${cols} FROM payments WHERE member_id = $1 ORDER BY payment_date DESC LIMIT $2 OFFSET $3`;
+          countQuery = 'SELECT COUNT(*)::int AS total FROM payments WHERE member_id = $1';
+          params = [req.user.id, limit, offset];
+          countParams = [req.user.id];
+        } else {
+          query = `SELECT ${cols} FROM payments ORDER BY payment_date DESC LIMIT $1 OFFSET $2`;
+          countQuery = 'SELECT COUNT(*)::int AS total FROM payments';
+          params = [limit, offset];
+          countParams = [];
         }
-        const r = await client.query(query, params);
-        return res.json({ payments: r.rows });
+        const [r, cR] = await Promise.all([
+          client.query(query, params),
+          client.query(countQuery, countParams)
+        ]);
+        const total = cR.rows[0]?.total || 0;
+        return res.json({ payments: r.rows, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
       }).catch(() => res.status(500).json({ error: 'Failed to fetch payments' }));
     }
     const db = getDb();
@@ -314,7 +368,9 @@ exports.getPayments = (req, res) => {
     } else {
       payments = db.get('payments').filter({ society_id: req.user.society_id }).sortBy('payment_date').reverse().value();
     }
-    res.json({ payments });
+    const total = payments.length;
+    const paginated = payments.slice(offset, offset + limit);
+    res.json({ payments: paginated, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch payments' });
   }
