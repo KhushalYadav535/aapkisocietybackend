@@ -416,7 +416,10 @@ exports.getBillingSummary = (req, res) => {
             collection_rate: totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : 0
           }
         });
-      }).catch(() => res.status(500).json({ error: 'Failed to get billing summary' }));
+      }).catch((err) => {
+        console.error('Billing summary database error:', err);
+        return res.status(500).json({ error: 'Failed to get billing summary' });
+      });
     }
     const db = getDb();
     const sid = req.user.society_id;

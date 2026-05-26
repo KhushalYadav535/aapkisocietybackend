@@ -14,6 +14,11 @@ const dashboardCache = (req, res, next) => {
   next();
 };
 
+// ─── OPTIMIZED: Combined endpoint returns all dashboard data at once ──────
+// Reduces 4 requests to 1, cuts load time significantly
+router.get('/overview', dashboardCache, dashboardController.getDashboardOverview);
+
+// Individual endpoints (kept for backward compatibility)
 router.get('/stats', dashboardCache, dashboardController.getStats);
 router.get('/recent-activities', dashboardCache, dashboardController.getRecentActivities);
 router.get('/collection-summary', dashboardCache, dashboardController.getCollectionSummary);

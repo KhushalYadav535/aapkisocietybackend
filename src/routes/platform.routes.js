@@ -29,7 +29,7 @@ router.post('/subscription/update', authenticate, platformAuth, requireMfaReauth
 router.post('/features/update', authenticate, platformAuth, platformCtrl.updateFeatureFlags);
 router.get('/stats', authenticate, platformAuth, platformCtrl.getPlatformStats);
 router.get('/plans', authenticate, platformCtrl.getPlans);
-router.get('/renewals', authenticate, platformAuth, platformCtrl.getRenewalCalendar);
+router.get('/renewals', authenticate, platformCtrl.getRenewalCalendar);
 router.post('/kyc/reupload', authenticate, platformAuth, platformCtrl.requestReUpload);
 router.post('/configuration', authenticate, platformCtrl.saveConfiguration);
 router.get('/onboarding/:id', authenticate, platformCtrl.getOnboardingProgress);

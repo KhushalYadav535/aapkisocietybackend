@@ -634,8 +634,10 @@ exports.getPlans = async (req, res) => {
 // ─── Platform Admin: Renewal Calendar ───────────────────────────────────
 exports.getRenewalCalendar = async (req, res) => {
   try {
-    if (!isPlatformRole(req.user.role)) {
-      return res.status(403).json({ error: 'Platform admin access required' });
+    // Allow platform admins and society admins/treasurers to view renewals
+    const allowed = ['PLATFORM_ADMIN', 'ADMIN', 'TREASURER'].includes(String(req.user.role || '').toUpperCase());
+    if (!allowed) {
+      return res.status(403).json({ error: 'Admin or Treasurer access required' });
     }
 
     const { days = 30 } = req.query;
