@@ -7,29 +7,25 @@ const XLSX = require('xlsx');
 const _tenantBillingInitLocks = new Map();
 
 const ensureTenantBillingTables = async (client) => {
-  // Ensure billing_heads table exists
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS billing_heads (
-      id TEXT PRIMARY KEY,
-      society_id TEXT,
-      name TEXT NOT NULL,
-      description TEXT,
-      default_amount NUMERIC(15,2) DEFAULT 0,
-      tax_rate NUMERIC(5,2) DEFAULT 0,
-      is_active BOOLEAN DEFAULT TRUE,
-      head_type TEXT DEFAULT 'CHARGE', -- CHARGE, MAINTENANCE, TAX, FEE
-      frequency TEXT DEFAULT 'MONTHLY', -- MONTHLY, QUARTERLY, YEARLY, ONE-TIME
-      is_system BOOLEAN DEFAULT FALSE,
-      ledger_account_id TEXT,
-      created_by TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-  const schema = client.database || 'default'; // we just need a key, but wait, client doesn't expose schema easily here.
-  // Actually, we can just use a single promise per tenant?
-  // We can't access tenantId from `client` easily. Let's just catch the specific error and ignore it, because it means the table exists!
   try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS billing_heads (
+        id TEXT PRIMARY KEY,
+        society_id TEXT,
+        name TEXT NOT NULL,
+        description TEXT,
+        default_amount NUMERIC(15,2) DEFAULT 0,
+        tax_rate NUMERIC(5,2) DEFAULT 0,
+        is_active BOOLEAN DEFAULT TRUE,
+        head_type TEXT DEFAULT 'CHARGE',
+        frequency TEXT DEFAULT 'MONTHLY',
+        is_system BOOLEAN DEFAULT FALSE,
+        ledger_account_id TEXT,
+        created_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     await client.query(`
       CREATE TABLE IF NOT EXISTS bills (
         id TEXT PRIMARY KEY,
@@ -51,7 +47,7 @@ const ensureTenantBillingTables = async (client) => {
         approved_by TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
     await client.query(`
       CREATE TABLE IF NOT EXISTS bill_items (
@@ -62,7 +58,7 @@ const ensureTenantBillingTables = async (client) => {
         tax_rate NUMERIC,
         tax_amount NUMERIC,
         total NUMERIC
-      );
+      )
     `);
     await client.query(`
       CREATE TABLE IF NOT EXISTS payments (
@@ -77,10 +73,10 @@ const ensureTenantBillingTables = async (client) => {
         status TEXT,
         payment_date TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
   } catch (err) {
-    // If the error is 'type already exists', it means another request just created it.
+    // Ignore concurrent table-creation races — any 'already exists' variant is safe to swallow
     if (err.message && err.message.includes('already exists')) {
       console.log('Ignored concurrent table creation error in billing:', err.message);
       return;
