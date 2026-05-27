@@ -324,6 +324,73 @@ const createTenantSchema = async (tenantId) => {
         created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+
+    // RBAC Tables
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS position_master (
+        id TEXT PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        is_elected INTEGER DEFAULT 0,
+        hierarchy_order INTEGER DEFAULT 99,
+        is_system_defined INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS roles (
+        id TEXT PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS permissions (
+        id TEXT PRIMARY KEY,
+        module TEXT NOT NULL,
+        action TEXT NOT NULL,
+        code TEXT UNIQUE NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS role_permissions (
+        role_id TEXT REFERENCES roles(id) ON DELETE CASCADE,
+        permission_id TEXT REFERENCES permissions(id) ON DELETE CASCADE,
+        PRIMARY KEY (role_id, permission_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS position_roles (
+        position_id TEXT REFERENCES position_master(id) ON DELETE CASCADE,
+        role_id TEXT REFERENCES roles(id) ON DELETE CASCADE,
+        PRIMARY KEY (position_id, role_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS society_position_assignments (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        position_id TEXT REFERENCES position_master(id) ON DELETE CASCADE,
+        start_date DATE,
+        end_date DATE,
+        status TEXT DEFAULT 'ACTIVE',
+        election_reference TEXT,
+        delegated_to_user_id TEXT,
+        delegation_start DATE,
+        delegation_end DATE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
   } finally {
     client.release();
   }

@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 const { normalizeRole, MFA_REQUIRED_ROLES } = require('../constants/roles');
+const { getTenantSchemaName } = require('../config/postgres');
 
 const authenticate = async (req, res, next) => {
   try {
@@ -74,4 +75,59 @@ const requireMFA = (req, res, next) => {
   next();
 };
 
-module.exports = { authenticate, authorize, requireMFA };
+const requirePermission = (permissionCode) => {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    
+    const role = normalizeRole(req.user.role);
+    if (role === 'ADMIN' || role === 'PLATFORM_ADMIN') {
+      return next();
+    }
+
+    const societyId = req.query.society_id || req.body.society_id || req.params.societyId || req.user.society_id;
+    if (!societyId) {
+      return res.status(400).json({ error: 'society_id context is required for permission check.' });
+    }
+
+    try {
+      if (!isPostgresEnabled) {
+        return next(); // Fallback if no DB
+      }
+
+      const schema = getTenantSchemaName(societyId);
+      const query = `
+        SELECT p.code 
+        FROM "${schema}".society_position_assignments spa
+        JOIN "${schema}".position_roles pr ON spa.position_id = pr.position_id
+        JOIN "${schema}".role_permissions rp ON pr.role_id = rp.role_id
+        JOIN "${schema}".permissions p ON rp.permission_id = p.id
+        WHERE spa.user_id = $1 
+          AND spa.status = 'ACTIVE' 
+          AND CURRENT_DATE BETWEEN spa.start_date AND spa.end_date
+          AND p.code = $2
+        LIMIT 1
+      `;
+      
+      const result = await pool.query(query, [req.user.id, permissionCode]);
+      
+      if (result.rows.length === 0) {
+        return res.status(403).json({ 
+          error: 'Insufficient permissions.', 
+          code: 'MISSING_PERMISSION', 
+          required: permissionCode 
+        });
+      }
+      
+      next();
+    } catch (err) {
+      console.error('Permission check error:', err);
+      // Fallback: If tables don't exist yet, we can fallback to role-based for now, or just fail.
+      // Failing secure is better.
+      return res.status(500).json({ error: 'Internal server error during permission check.' });
+    }
+  };
+};
+
+module.exports = { authenticate, authorize, requireMFA, requirePermission };

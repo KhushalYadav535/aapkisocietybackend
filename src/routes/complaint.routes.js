@@ -1,7 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validate');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const complaintController = require('../controllers/complaint.controller');
 
 const router = express.Router();
@@ -18,8 +18,8 @@ router.post('/', authorize('RESIDENT', 'ADMIN', 'COMMITTEE', 'PLATFORM_ADMIN'), 
   body('priority').optional().isIn(['LOW', 'MEDIUM', 'HIGH', 'URGENT']),
 ], validate, complaintController.create);
 router.put('/:id', complaintController.update);
-router.put('/:id/assign', authorize('ADMIN', 'COMMITTEE', 'PLATFORM_ADMIN'), complaintController.assign);
-router.put('/:id/resolve', authorize('ADMIN', 'COMMITTEE', 'PLATFORM_ADMIN'), complaintController.resolve);
+router.put('/:id/assign', requirePermission('COMPLAINT_ASSIGN'), complaintController.assign);
+router.put('/:id/resolve', requirePermission('COMPLAINT_ASSIGN'), complaintController.resolve);
 // Any authenticated user can close their own complaint; controller enforces ownership
 router.put('/:id/close', complaintController.close);
 

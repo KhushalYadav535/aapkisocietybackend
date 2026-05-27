@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize , requirePermission } = require('../middleware/auth');
 const ctrl = require('../controllers/accounting.controller');
 
 // All accounting routes require authentication
@@ -8,20 +8,20 @@ router.use(authenticate);
 
 // ── Chart of Accounts ─────────────────────────────────────────────────────────
 router.get('/accounts',         ctrl.getAccounts);
-router.post('/accounts',        authorize('ADMIN', 'TREASURER', 'MAKER', 'CHECKER'), ctrl.createAccount);
+router.post('/accounts', requirePermission('ACCOUNTING_MANAGE'), ctrl.createAccount);
 
 // ── Vouchers ──────────────────────────────────────────────────────────────────
 router.get('/vouchers',          ctrl.getVouchers);
-router.post('/vouchers',         authorize('ADMIN', 'TREASURER', 'MAKER', 'CHECKER', 'ACCOUNTANT'), ctrl.createVoucher);
-router.put('/vouchers/:id/approve', authorize('ADMIN', 'TREASURER', 'CHECKER'), ctrl.approveVoucher);
-router.put('/vouchers/:id/reverse', authorize('ADMIN', 'TREASURER'), ctrl.reverseVoucher);
+router.post('/vouchers', requirePermission('ACCOUNTING_MANAGE'), ctrl.createVoucher);
+router.put('/vouchers/:id/approve', requirePermission('ACCOUNTING_MANAGE'), ctrl.approveVoucher);
+router.put('/vouchers/:id/reverse', requirePermission('ACCOUNTING_MANAGE'), ctrl.reverseVoucher);
 router.get('/vouchers/:id/entries', ctrl.getVoucherEntries);
 
 // ── Reports ───────────────────────────────────────────────────────────────────
-router.get('/trial-balance', authorize('ADMIN', 'TREASURER', 'MAKER', 'CHECKER', 'COMMITTEE', 'AUDITOR'), ctrl.getTrialBalance);
-router.get('/ledger/:accountId', authorize('ADMIN', 'TREASURER', 'MAKER', 'CHECKER', 'COMMITTEE', 'AUDITOR'), ctrl.getLedger);
-router.get('/income-statement', authorize('ADMIN', 'TREASURER', 'COMMITTEE', 'AUDITOR'), ctrl.getIncomeStatement);
-router.get('/balance-sheet', authorize('ADMIN', 'TREASURER', 'COMMITTEE', 'AUDITOR'), ctrl.getBalanceSheet);
-router.get('/bank-reconciliation', authorize('ADMIN', 'TREASURER', 'AUDITOR'), ctrl.getBankReconciliationStatement);
+router.get('/trial-balance', requirePermission('ACCOUNTING_MANAGE'), ctrl.getTrialBalance);
+router.get('/ledger/:accountId', requirePermission('ACCOUNTING_MANAGE'), ctrl.getLedger);
+router.get('/income-statement', requirePermission('ACCOUNTING_MANAGE'), ctrl.getIncomeStatement);
+router.get('/balance-sheet', requirePermission('ACCOUNTING_MANAGE'), ctrl.getBalanceSheet);
+router.get('/bank-reconciliation', requirePermission('ACCOUNTING_MANAGE'), ctrl.getBankReconciliationStatement);
 
 module.exports = router;

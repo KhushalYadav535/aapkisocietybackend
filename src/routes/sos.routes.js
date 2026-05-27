@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize , requirePermission } = require('../middleware/auth');
 const ctrl = require('../controllers/sos.controller');
 
 router.use(authenticate);
@@ -13,7 +13,7 @@ router.get('/active-count', ctrl.activeCount);
 router.get('/', ctrl.getAll);
 
 // Guard/Admin can respond & resolve
-router.put('/:id/respond', authorize('ADMIN', 'COMMITTEE', 'GUARD', 'PLATFORM_ADMIN'), ctrl.respond);
-router.put('/:id/resolve', authorize('ADMIN', 'COMMITTEE', 'GUARD', 'PLATFORM_ADMIN'), ctrl.resolve);
+router.put('/:id/respond', requirePermission('SOS_RESPOND'), ctrl.respond);
+router.put('/:id/resolve', requirePermission('SOS_RESPOND'), ctrl.resolve);
 
 module.exports = router;

@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const documentController = require('../controllers/document.controller');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize , requirePermission } = require('../middleware/auth');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, path.join(__dirname, '../../uploads/documents')),
@@ -29,8 +29,8 @@ router.use(authenticate);
 router.get('/', documentController.getAll);
 router.get('/categories', documentController.getCategories);
 router.get('/:id', documentController.getById);
-router.post('/', authorize('ADMIN', 'TREASURER', 'COMMITTEE'), upload.single('file'), documentController.upload);
-router.put('/:id', authorize('ADMIN', 'TREASURER'), documentController.update);
-router.delete('/:id', authorize('ADMIN'), documentController.delete);
+router.post('/', requirePermission('DOCUMENT_MANAGE'), upload.single('file'), documentController.upload);
+router.put('/:id', requirePermission('DOCUMENT_MANAGE'), documentController.update);
+router.delete('/:id', requirePermission('DOCUMENT_MANAGE'), documentController.delete);
 
 module.exports = router;

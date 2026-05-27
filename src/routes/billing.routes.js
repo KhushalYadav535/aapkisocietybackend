@@ -1,7 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validate');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { requireFeature } = require('../middleware/feature');
 const { requireTenantContext } = require('../middleware/tenant');
 const billingController = require('../controllers/billing.controller');
@@ -21,8 +21,8 @@ router.post('/bills', authorize('ADMIN', 'TREASURER', 'MAKER', 'PLATFORM_ADMIN')
   body('amount').isNumeric().withMessage('Amount must be numeric'),
   body('bill_type').optional().trim(),
 ], validate, billingController.createBill);
-router.put('/bills/:id/approve', authorize('ADMIN', 'TREASURER', 'CHECKER', 'PLATFORM_ADMIN'), billingController.approveBill);
-router.put('/bills/:id/reject', authorize('ADMIN', 'TREASURER', 'CHECKER', 'PLATFORM_ADMIN'), billingController.rejectBill);
+router.put('/bills/:id/approve', requirePermission('BILL_APPROVE'), billingController.approveBill);
+router.put('/bills/:id/reject', requirePermission('BILL_APPROVE'), billingController.rejectBill);
 
 router.post('/generate-monthly', authorize('ADMIN', 'TREASURER', 'PLATFORM_ADMIN'), billingController.generateMonthlyBills);
 

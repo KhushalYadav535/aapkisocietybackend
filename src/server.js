@@ -45,6 +45,7 @@ const assetRoutes = require('./routes/asset.routes');
 const propertyRoutes = require('./routes/property.routes');
 const scrollerRoutes = require('./routes/scroller.routes');
 const exportRoutes = require('./routes/export.routes');
+const rbacRoutes = require('./routes/rbac.routes');
 const { enforceSuspension } = require('./middleware/suspension');
 
 const app = express();
@@ -154,6 +155,8 @@ app.use('/api/assets', assetRoutes);
 app.use('/api/properties', propertyRoutes);
 app.use('/api/scrollers', scrollerRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/api/rbac', rbacRoutes);
+
 
 // Health check
 app.get('/api/health', async (req, res) => {
