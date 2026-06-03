@@ -69,6 +69,12 @@ app.use(cors({
     // In production, check against FRONTEND_URL
     const allowed = (process.env.FRONTEND_URL || 'http://localhost:3000').split(',').map(u => u.trim());
     if (allowed.includes(origin)) return callback(null, true);
+    
+    // Fallback: strictly allow aapkisociety.in and www.aapkisociety.in
+    if (/^https:\/\/(www\.)?aapkisociety\.in$/.test(origin)) {
+      return callback(null, true);
+    }
+    
     callback(new Error(`CORS: origin ${origin} not allowed`));
   },
   credentials: true
