@@ -11,7 +11,7 @@ router.post('/register', [
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
   body('first_name').trim().notEmpty().withMessage('First name required'),
   body('last_name').trim().notEmpty().withMessage('Last name required'),
-  body('phone').optional().isMobilePhone('en-IN').withMessage('Valid Indian phone number required'),
+  body('phone').optional({ checkFalsy: true }).isMobilePhone('en-IN').withMessage('Valid Indian phone number required'),
 ], validate, authController.register);
 
 router.post('/login', [
