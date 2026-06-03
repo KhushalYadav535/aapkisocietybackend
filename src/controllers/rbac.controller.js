@@ -6,7 +6,10 @@ const getActivePermissions = async (req, res) => {
   try {
     const societyId = req.query.societyId || req.user.society_id;
     if (!societyId) {
-      return res.status(400).json({ error: 'societyId is required' });
+      if (req.user.role === 'PLATFORM_ADMIN') {
+        return res.json({ permissions: ['*'] });
+      }
+      return res.json({ permissions: [] });
     }
 
     const schema = getTenantSchemaName(societyId);
