@@ -29,7 +29,7 @@ const authenticate = async (req, res, next) => {
     }
 
     user.role = normalizeRole(user.role);
-    const mfaExempt = ['/api/auth/mfa/setup', '/api/auth/mfa/verify', '/api/auth/me', '/api/auth/login', '/mfa/setup', '/mfa/verify', '/me', '/login'];
+    const mfaExempt = ['/api/auth/mfa/setup', '/api/auth/mfa/verify', '/api/auth/me', '/api/auth/login', '/mfa/setup', '/mfa/verify', '/me', '/login', '/api/rbac/me/permissions', '/me/permissions'];
     if (MFA_REQUIRED_ROLES.includes(user.role) && !user.mfa_enabled && !mfaExempt.includes(req.path)) {
       return res.status(403).json({
         error: 'MFA setup required for this role.',
@@ -64,7 +64,7 @@ const authorize = (...roles) => {
 
 const requireMFA = (req, res, next) => {
   req.user.role = normalizeRole(req.user.role);
-  const exemptPaths = ['/api/auth/mfa/setup', '/api/auth/mfa/verify', '/api/auth/me', '/mfa/setup', '/mfa/verify', '/me'];
+  const exemptPaths = ['/api/auth/mfa/setup', '/api/auth/mfa/verify', '/api/auth/me', '/mfa/setup', '/mfa/verify', '/me', '/api/rbac/me/permissions', '/me/permissions'];
   if (MFA_REQUIRED_ROLES.includes(req.user.role) && !req.user.mfa_enabled && !exemptPaths.includes(req.path)) {
     return res.status(403).json({
       error: 'MFA setup required for this role.',
