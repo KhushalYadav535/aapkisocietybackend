@@ -16,9 +16,9 @@ const generateToken = (user) => {
 exports.register = async (req, res) => {
   try {
     const { email, password, first_name, last_name, phone, role, society_id, flat_number, wing } = req.body;
-    const requestedRole = normalizeRole(role || 'RESIDENT');
-    if (requestedRole !== 'RESIDENT') {
-      return res.status(403).json({ error: 'Self-registration only allows RESIDENT role.' });
+    const requestedRole = normalizeRole(role || 'ADMIN');
+    if (requestedRole !== 'ADMIN') {
+      return res.status(403).json({ error: 'Self-registration only allows ADMIN role.' });
     }
     let existing;
     if (isPostgresEnabled) {
