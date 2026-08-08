@@ -20,7 +20,9 @@ const ensurePlatformSocietiesSchema = async () => {
   if (!pool) return;
   if (_societiesSchemaReady) return;
   if (_societiesSchemaPromise) return _societiesSchemaPromise;
-  _societiesSchemaPromise = _doEnsurePlatformSocietiesSchema().then(() => { _societiesSchemaReady = true; });
+  _societiesSchemaPromise = _doEnsurePlatformSocietiesSchema()
+    .then(() => { _societiesSchemaReady = true; })
+    .catch((err) => { _societiesSchemaPromise = null; throw err; });
   return _societiesSchemaPromise;
 };
 
@@ -124,7 +126,9 @@ const ensurePlatformSchema = async () => {
   if (!pool) return;
   if (_platformSchemaReady) return;
   if (_platformSchemaPromise) return _platformSchemaPromise;
-  _platformSchemaPromise = _doEnsurePlatformSchema().then(() => { _platformSchemaReady = true; });
+  _platformSchemaPromise = _doEnsurePlatformSchema()
+    .then(() => { _platformSchemaReady = true; })
+    .catch((err) => { _platformSchemaPromise = null; throw err; });
   return _platformSchemaPromise;
 };
 
