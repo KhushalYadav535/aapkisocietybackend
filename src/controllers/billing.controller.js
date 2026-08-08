@@ -891,7 +891,7 @@ exports.generateBulkBillsWithHeads = (req, res) => {
 
         // Get all resident members
         const { rows: members } = await client.query(
-          "SELECT id, name, flat_number, wing FROM platform.users WHERE society_id = $1 AND role = 'RESIDENT' AND is_active = 1",
+          "SELECT id, first_name, last_name, flat_number, wing FROM platform.users WHERE society_id = $1 AND role = 'RESIDENT' AND is_active = 1",
           [req.user.society_id]
         );
 
@@ -958,7 +958,8 @@ exports.generateBulkBillsWithHeads = (req, res) => {
 
             generatedBills.push({
               bill_id: billId, bill_number: billNum, member_id: member.id,
-              member_name: member.name, flat_number: member.flat_number,
+              member_name: `${member.first_name || ''} ${member.last_name || ''}`.trim(),
+              flat_number: member.flat_number,
               amount: totalAmount, tax_amount: totalTax, total_amount: grandTotal,
               billing_period, heads_count: heads.length
             });
@@ -1045,7 +1046,7 @@ exports.createBillWithHeads = (req, res) => {
 
         // Get member details
         const { rows: members } = await client.query(
-          "SELECT id, name, flat_number, wing FROM platform.users WHERE id = $1",
+          "SELECT id, first_name, last_name, flat_number, wing FROM platform.users WHERE id = $1",
           [member_id]
         );
         if (members.length === 0) {
@@ -1137,7 +1138,8 @@ exports.createBillWithHeads = (req, res) => {
 
         return res.status(201).json({
           bill: {
-            id: billId, bill_number: billNumber, member_id: member.id, member_name: member.name,
+            id: billId, bill_number: billNumber, member_id: member.id,
+            member_name: `${member.first_name || ''} ${member.last_name || ''}`.trim(),
             flat_number: member.flat_number, billing_period, amount: totalAmount, tax_amount: totalTax,
             total_amount: grandTotal, status: 'PENDING', items: billItems, arrears_included: arrearsAmount
           }

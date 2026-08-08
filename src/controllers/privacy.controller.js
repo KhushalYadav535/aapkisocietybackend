@@ -65,10 +65,13 @@ exports.updateConsent = (req, res) => {
 exports.getConsent = (req, res) => {
   if (isPostgresEnabled) {
     return ensurePrivacyTables().then(async () => {
-      const r = await pool.query('SELECT consent FROM platform.users WHERE id = $1 LIMIT 1', [req.user.id]);
+      const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.user.id]);
       const consent = r.rows[0]?.consent || { billing_comms: true, statutory_notices: true, marketing: false };
       return res.json({ consent });
-    }).catch(() => res.status(500).json({ error: 'Failed to fetch consent' }));
+    }).catch((err) => {
+      console.error('Failed to fetch consent:', err.message);
+      res.status(500).json({ error: 'Failed to fetch consent' });
+    });
   }
   const db = getDb();
   const user = db.get('users').find({ id: req.user.id }).value();

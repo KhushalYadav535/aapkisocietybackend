@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 const { normalizeRole } = require('../constants/roles');
+const { logAudit } = require('./audit.controller');
 
 const generateToken = (user) => {
   return jwt.sign(
@@ -83,20 +84,29 @@ exports.login = async (req, res) => {
       user = db.get('users').find({ email }).value();
     }
     if (!user) {
+      req.user = { id: 'system', society_id: 'platform' };
+      await logAudit(req, 'LOGIN_FAILURE', 'USER', email, null, { reason: 'User not found' });
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     if (!user.is_active) {
+      req.user = { id: user.id, society_id: user.society_id || 'platform' };
+      await logAudit(req, 'LOGIN_FAILURE', 'USER', user.id, null, { reason: 'Deactivated account' });
       return res.status(403).json({ error: 'Account is deactivated. Contact admin.' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      req.user = { id: user.id, society_id: user.society_id || 'platform' };
+      await logAudit(req, 'LOGIN_FAILURE', 'USER', user.id, null, { reason: 'Incorrect password' });
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     user.role = normalizeRole(user.role);
     const token = generateToken(user);
+
+    req.user = { id: user.id, society_id: user.society_id || 'platform' };
+    await logAudit(req, 'LOGIN_SUCCESS', 'USER', user.id, null, null);
 
     res.json({
       message: 'Login successful',

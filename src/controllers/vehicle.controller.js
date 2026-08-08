@@ -37,7 +37,7 @@ const ensureVehicleTables = async (societyId) => {
       )
     `);
   } catch (err) {
-    if (err.message && err.message.includes('already exists')) {
+    if (err.message && (err.message.includes('already exists') || err.message.includes('duplicate key value violates unique constraint "pg_type_typname_nsp_index"'))) {
       return;
     }
     throw err;
@@ -224,9 +224,19 @@ exports.getParkingSlots = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureVehicleTables(societyId).then(async () => {
-        let query = `SELECT ps.*, v.vehicle_number, u.flat_number, u.wing
-          FROM \"society_${societyId}\".parking_slots ps
-          LEFT JOIN \"society_${societyId}\".vehicles v ON v.parking_slot = ps.slot_number AND v.vehicle_type = ps.slot_type
+        // Recompute is_available dynamically based on whether any active vehicle occupies this slot
+        let query = `
+          SELECT
+            ps.*,
+            CASE WHEN v.id IS NULL THEN true ELSE false END AS is_available,
+            v.vehicle_number,
+            u.flat_number,
+            u.wing
+          FROM "society_${societyId}".parking_slots ps
+          LEFT JOIN "society_${societyId}".vehicles v
+            ON v.parking_slot = ps.slot_number
+            AND v.vehicle_type = ps.slot_type
+            AND v.is_active = true
           LEFT JOIN platform.users u ON u.id = ps.flat_id
           WHERE ps.society_id = $1`;
         const params = [societyId];
@@ -235,7 +245,7 @@ exports.getParkingSlots = (req, res) => {
 
         const r = await pool.query(query, params);
         return res.json({ slots: r.rows });
-      }).catch(() => res.status(500).json({ error: 'Failed to fetch parking slots' }));
+      }).catch((err) => { console.error('getParkingSlots error:', err.message); return res.status(500).json({ error: 'Failed to fetch parking slots' }); });
     }
 
     const db = getDb();
@@ -248,7 +258,13 @@ exports.getParkingSlots = (req, res) => {
     slots = slots.map(s => {
       const vehicle = vehicles.find(v => v.parking_slot === s.slot_number && v.vehicle_type === s.slot_type && v.is_active);
       const user = users.find(u => u.id === s.flat_id);
-      return { ...s, vehicle_number: vehicle?.vehicle_number, flat_number: user?.flat_number, wing: user?.wing };
+      return {
+        ...s,
+        is_available: !vehicle, // true if no vehicle assigned
+        vehicle_number: vehicle?.vehicle_number,
+        flat_number: user?.flat_number,
+        wing: user?.wing,
+      };
     });
 
     res.json({ slots });

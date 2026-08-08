@@ -112,8 +112,8 @@ exports.scan = async (req, res) => {
     if (isPostgresEnabled) {
       await ensurePatrolTables(societyId);
       const cpRes = await pool.query(
-        `SELECT * FROM \"society_${societyId}\".patrol_checkpoints WHERE qr_code=$1 AND society_id=$2 AND is_active=1`,
-        [qr_code, societyId]
+        `SELECT * FROM \"society_${societyId}\".patrol_checkpoints WHERE (qr_code=$1 OR qr_code ILIKE $3 OR location_name ILIKE $3) AND society_id=$2 AND is_active=1`,
+        [qr_code, societyId, `%${qr_code}%`]
       );
       if (cpRes.rows.length === 0) return res.status(404).json({ error: 'Invalid QR code or checkpoint not found' });
       checkpoint = cpRes.rows[0];
@@ -123,17 +123,25 @@ exports.scan = async (req, res) => {
         `INSERT INTO \"society_${societyId}\".patrol_logs (id,society_id,checkpoint_id,checkpoint_name,scanned_by,scanned_at,notes,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [logId, societyId, checkpoint.id, checkpoint.location_name, req.user.id, now, notes || null, now]
       );
+      
+      const { logAudit } = require('./audit.controller');
+      await logAudit(req, 'PATROL_LOGGED', 'PATROL_CHECKPOINT', checkpoint.id, null, { checkpoint_name: checkpoint.location_name });
+      
       return res.json({ success: true, checkpoint_name: checkpoint.location_name, scanned_at: now });
     }
 
     const db = getDb();
     const cps = db.get('patrol_checkpoints').value() || [];
-    checkpoint = cps.find(c => c.qr_code === qr_code && c.society_id === societyId && c.is_active !== 0);
+    checkpoint = cps.find(c => (c.qr_code === qr_code || c.qr_code.toLowerCase().includes(qr_code.toLowerCase()) || c.location_name.toLowerCase().includes(qr_code.toLowerCase())) && c.society_id === societyId && c.is_active !== 0);
     if (!checkpoint) return res.status(404).json({ error: 'Invalid QR code or checkpoint not found' });
 
     if (!db.get('patrol_logs').value()) db.set('patrol_logs', []).write();
     const log = { id: uuidv4(), society_id: societyId, checkpoint_id: checkpoint.id, checkpoint_name: checkpoint.location_name, scanned_by: req.user.id, scanned_at: now, notes: notes || null, created_at: now };
     db.get('patrol_logs').push(log).write();
+    
+    const { logAudit } = require('./audit.controller');
+    await logAudit(req, 'PATROL_LOGGED', 'PATROL_CHECKPOINT', checkpoint.id, null, { checkpoint_name: checkpoint.location_name });
+    
     res.json({ success: true, checkpoint_name: checkpoint.location_name, scanned_at: now });
   } catch (error) {
     res.status(500).json({ error: 'Failed to log patrol scan' });

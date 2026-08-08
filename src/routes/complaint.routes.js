@@ -11,7 +11,7 @@ router.use(authenticate);
 router.get('/', complaintController.getAll);
 router.get('/:id', complaintController.getById);
 // ADMIN/COMMITTEE/PLATFORM_ADMIN can also log complaints on behalf of residents
-router.post('/', authorize('RESIDENT', 'ADMIN', 'COMMITTEE', 'PLATFORM_ADMIN'), [
+router.post('/', authorize('RESIDENT', 'ADMIN', 'COMMITTEE', 'TREASURER', 'MAKER', 'CHECKER', 'PLATFORM_ADMIN'), [
   body('title').trim().notEmpty().withMessage('Title required'),
   body('description').optional().trim(),
   body('category').optional().trim(),

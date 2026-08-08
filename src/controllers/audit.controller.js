@@ -43,13 +43,22 @@ const logAudit = async (req, action, entityType, entityId, beforeState, afterSta
       ip_address: ip, user_agent: ua, trace_id: traceId
     };
 
-    if (isPostgresEnabled && tenantId !== 'platform' && client) {
-      await client.query(
-        `INSERT INTO audit_logs (id,tenant_id,user_id,action,entity_type,entity_id,before_state,after_state,ip_address,user_agent,trace_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [id, tenantId, userId, action, entityType || null, entityId || null,
-         entry.before_state, entry.after_state, ip, ua, traceId]
-      );
+    if (isPostgresEnabled && tenantId !== 'platform') {
+      const executeInsert = async (dbClient) => {
+        await ensureAuditTable(dbClient);
+        await dbClient.query(
+          `INSERT INTO audit_logs (id,tenant_id,user_id,action,entity_type,entity_id,before_state,after_state,ip_address,user_agent,trace_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [id, tenantId, userId, action, entityType || null, entityId || null,
+           entry.before_state, entry.after_state, ip, ua, traceId]
+        );
+      };
+
+      if (client) {
+        await executeInsert(client);
+      } else {
+        await withTenant(tenantId, executeInsert);
+      }
     } else {
       // LowDB fallback
       try {
@@ -87,8 +96,8 @@ module.exports.getLogs = async (req, res) => {
         if (entity_type) { q += ` AND al.entity_type = $${idx++}`; params.push(entity_type); }
         if (action)      { q += ` AND al.action = $${idx++}`;       params.push(action); }
         if (user_id)     { q += ` AND al.user_id = $${idx++}`;      params.push(user_id); }
-        if (from)        { q += ` AND al.created_at >= $${idx++}`;  params.push(from); }
-        if (to)          { q += ` AND al.created_at <= $${idx++}`;  params.push(to); }
+        if (from)        { q += ` AND al.created_at >= $${idx++}`;  params.push(`${from} 00:00:00`); }
+        if (to)          { q += ` AND al.created_at <= $${idx++}`;  params.push(`${to} 23:59:59`); }
 
         q += ` ORDER BY al.created_at DESC LIMIT $${idx++} OFFSET $${idx++}`;
         params.push(parseInt(limit), parseInt(offset));
