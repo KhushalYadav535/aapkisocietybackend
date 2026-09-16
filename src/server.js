@@ -46,6 +46,13 @@ const propertyRoutes = require('./routes/property.routes');
 const scrollerRoutes = require('./routes/scroller.routes');
 const exportRoutes = require('./routes/export.routes');
 const rbacRoutes = require('./routes/rbac.routes');
+const parcelRoutes = require('./routes/parcel.routes');
+const moveRequestRoutes = require('./routes/move-request.routes');
+const marketplaceRoutes = require('./routes/marketplace.routes');
+const carpoolRoutes = require('./routes/carpool.routes');
+const violationRoutes = require('./routes/violation.routes');
+const bloodRoutes = require('./routes/blood.routes');
+const demoRoutes = require('./routes/demo.routes');
 const { enforceSuspension } = require('./middleware/suspension');
 
 const app = express();
@@ -162,6 +169,13 @@ app.use('/api/properties', propertyRoutes);
 app.use('/api/scrollers', scrollerRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/rbac', rbacRoutes);
+app.use('/api/parcels', parcelRoutes);
+app.use('/api/move-requests', moveRequestRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
+app.use('/api/carpools', carpoolRoutes);
+app.use('/api/violations', violationRoutes);
+app.use('/api/blood', bloodRoutes);
+app.use('/api/demo', demoRoutes);
 
 
 // Health check

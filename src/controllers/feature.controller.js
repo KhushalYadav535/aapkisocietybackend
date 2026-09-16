@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled } = require('../config/postgres');
+const { isPlatformRole } = require('../constants/roles');
 
 const ensureFeatureTable = async (client) => {
   await client.query(`
@@ -19,8 +20,9 @@ const ensureFeatureTable = async (client) => {
 };
 
 exports.getFlags = (req, res) => {
-  if (isPostgresEnabled && req.user.society_id) {
-    const societyId = req.query.society_id || req.user.society_id;
+  const societyId = (isPlatformRole(req.user.role) && req.query.society_id) ? req.query.society_id : req.user.society_id;
+  if (!societyId) return res.status(400).json({ error: 'society_id context required' });
+  if (isPostgresEnabled) {
     return withTenant(societyId, async (client) => {
       await ensureFeatureTable(client);
       const r = await client.query('SELECT * FROM feature_flags WHERE society_id = $1', [societyId]);
@@ -28,15 +30,15 @@ exports.getFlags = (req, res) => {
     }).catch(() => res.status(500).json({ error: 'Failed to fetch feature flags' }));
   }
   const db = getDb();
-  const societyId = req.query.society_id || req.user.society_id;
   const flags = db.get('feature_flags').filter({ society_id: societyId }).value();
   res.json({ flags });
 };
 
 exports.upsertFlag = (req, res) => {
-  if (isPostgresEnabled && req.user.society_id) {
-    const { society_id, feature_key, enabled, reason } = req.body;
-    const societyId = society_id || req.user.society_id;
+  const { society_id, feature_key, enabled, reason } = req.body;
+  const societyId = (isPlatformRole(req.user.role) && society_id) ? society_id : req.user.society_id;
+  if (!societyId) return res.status(400).json({ error: 'society_id context required' });
+  if (isPostgresEnabled) {
     return withTenant(societyId, async (client) => {
       await ensureFeatureTable(client);
       const now = new Date().toISOString();
@@ -58,8 +60,6 @@ exports.upsertFlag = (req, res) => {
     }).catch(() => res.status(500).json({ error: 'Failed to upsert feature flag' }));
   }
   const db = getDb();
-  const { society_id, feature_key, enabled, reason } = req.body;
-  const societyId = society_id || req.user.society_id;
   const now = new Date().toISOString();
   const existing = db.get('feature_flags').find({ society_id: societyId, feature_key }).value();
 

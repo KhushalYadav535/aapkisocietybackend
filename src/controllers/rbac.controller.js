@@ -14,7 +14,7 @@ const getActivePermissions = async (req, res) => {
 
     const schema = getTenantSchemaName(societyId);
     
-    // Check for PLATFORM_ADMIN
+    // Check for PLATFORM_ADMIN or ADMIN
     if (req.user.role === 'PLATFORM_ADMIN' || req.user.role === 'ADMIN') {
       const allPerms = await pool.query(`SELECT code FROM "${schema}".permissions`);
       return res.json({ permissions: allPerms.rows.map(p => p.code) });
@@ -32,7 +32,11 @@ const getActivePermissions = async (req, res) => {
     `;
     
     const result = await pool.query(query, [req.user.id]);
-    const permissions = result.rows.map(r => r.code);
+    let permissions = result.rows.map(r => r.code);
+    if (req.user.role === 'GUARD') {
+      const guardPerms = ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'];
+      permissions = Array.from(new Set([...permissions, ...guardPerms]));
+    }
     
     res.json({ permissions });
   } catch (err) {
@@ -59,7 +63,33 @@ const assignPosition = async (req, res) => {
     }
     const positionId = posResult.rows[0].id;
 
-    // Check for overlapping assignments
+    // TFS Rule 1: Only one ACTIVE Secretary or President per society unless previous assignment ended
+    if (['SECRETARY', 'PRESIDENT'].includes(positionCode)) {
+      const activeSingleCheck = await pool.query(`
+        SELECT spa.id, u.first_name, u.last_name, u.email 
+        FROM "${schema}".society_position_assignments spa
+        JOIN "${schema}".position_master p ON spa.position_id = p.id
+        JOIN platform.users u ON spa.user_id = u.id
+        WHERE p.code = $1
+          AND spa.user_id != $2
+          AND spa.status = 'ACTIVE'
+          AND (
+            (spa.start_date <= $3 AND spa.end_date >= $3) OR
+            (spa.start_date <= $4 AND spa.end_date >= $4) OR
+            (spa.start_date >= $3 AND spa.end_date <= $4)
+          )
+        LIMIT 1
+      `, [positionCode, userId, startDate, endDate]);
+
+      if (activeSingleCheck.rows.length > 0) {
+        const holder = activeSingleCheck.rows[0];
+        return res.status(400).json({ 
+          error: `An active ${positionCode} already exists for this term: ${holder.first_name || ''} ${holder.last_name || ''} (${holder.email}). Please expire or end the current term first.` 
+        });
+      }
+    }
+
+    // Check for overlapping assignments for the same user
     const overlapCheck = await pool.query(`
       SELECT id FROM "${schema}".society_position_assignments 
       WHERE user_id = $1 
@@ -73,7 +103,7 @@ const assignPosition = async (req, res) => {
     `, [userId, positionId, startDate, endDate]);
 
     if (overlapCheck.rows.length > 0) {
-      return res.status(400).json({ error: 'Overlapping active assignment exists for this position' });
+      return res.status(400).json({ error: 'Overlapping active assignment exists for this user and position' });
     }
 
     const id = uuidv4();

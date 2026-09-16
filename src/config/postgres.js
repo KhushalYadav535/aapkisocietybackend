@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { v4: uuidv4 } = require('uuid');
 
 const connectionString = process.env.DATABASE_URL;
 const pool = connectionString ? new Pool({ connectionString }) : null;
@@ -70,7 +71,8 @@ const _doEnsurePlatformSocietiesSchema = async () => {
       subscription_action_at TIMESTAMPTZ,
       password_hash TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      settings JSONB DEFAULT '{}'::jsonb
     )
   `);
   const alters = [
@@ -112,7 +114,8 @@ const _doEnsurePlatformSocietiesSchema = async () => {
     `ALTER TABLE platform.societies ADD COLUMN IF NOT EXISTS subscription_action_at TIMESTAMPTZ`,
     `ALTER TABLE platform.societies ADD COLUMN IF NOT EXISTS password_hash TEXT`,
     `ALTER TABLE platform.societies ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`,
-    `ALTER TABLE platform.societies ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`
+    `ALTER TABLE platform.societies ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
+    `ALTER TABLE platform.societies ADD COLUMN IF NOT EXISTS settings JSONB DEFAULT '{}'::jsonb`
   ];
   for (const sql of alters) {
     await pool.query(sql);
@@ -199,9 +202,10 @@ const _doEnsurePlatformSchema = async () => {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  // Migrate: add scroll_speed column if missing on existing scrollers table
+  // Migrate: add scroll_speed column if missing on existing scrollers table, and blood_group on users
   try {
     await pool.query(`ALTER TABLE platform.scrollers ADD COLUMN IF NOT EXISTS scroll_speed TEXT DEFAULT 'MEDIUM'`);
+    await pool.query(`ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS blood_group TEXT`);
   } catch (_) {}
   await ensurePlatformSocietiesSchema();
 };
@@ -395,10 +399,516 @@ const createTenantSchema = async (tenantId) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS parcels (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        flat_number TEXT NOT NULL,
+        wing TEXT NOT NULL,
+        recipient_name TEXT,
+        delivery_company TEXT NOT NULL,
+        tracking_number TEXT,
+        parcel_count INTEGER DEFAULT 1,
+        pickup_pin TEXT NOT NULL,
+        status TEXT DEFAULT 'AT_GATE',
+        photo_url TEXT,
+        notes TEXT,
+        received_by_guard_id TEXT,
+        collected_by_name TEXT,
+        collected_at TIMESTAMPTZ,
+        returned_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS move_requests (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        user_id TEXT,
+        request_type TEXT NOT NULL,
+        applicant_name TEXT NOT NULL,
+        applicant_phone TEXT NOT NULL,
+        applicant_email TEXT,
+        flat_number TEXT NOT NULL,
+        wing TEXT NOT NULL,
+        move_date DATE NOT NULL,
+        time_slot TEXT NOT NULL,
+        vehicle_number TEXT,
+        mover_agency TEXT,
+        status TEXT DEFAULT 'PENDING',
+        rejection_reason TEXT,
+        approved_by TEXT,
+        approved_at TIMESTAMPTZ,
+        certificate_number TEXT,
+        verification_token TEXT,
+        documents JSONB DEFAULT '[]'::jsonb,
+        lift_charges_paid INTEGER DEFAULT 0,
+        security_deposit NUMERIC DEFAULT 0,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS marketplace_items (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        seller_id TEXT NOT NULL,
+        seller_name TEXT NOT NULL,
+        seller_flat TEXT NOT NULL,
+        seller_wing TEXT NOT NULL,
+        seller_phone TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        category TEXT NOT NULL,
+        listing_type TEXT DEFAULT 'SELL',
+        price NUMERIC DEFAULT 0,
+        original_price NUMERIC,
+        condition TEXT DEFAULT 'GOOD',
+        photos JSONB DEFAULT '[]'::jsonb,
+        status TEXT DEFAULT 'AVAILABLE',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS carpools (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        driver_id TEXT NOT NULL,
+        driver_name TEXT NOT NULL,
+        driver_flat TEXT NOT NULL,
+        driver_wing TEXT NOT NULL,
+        driver_phone TEXT,
+        origin TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        departure_date DATE NOT NULL,
+        departure_time TEXT NOT NULL,
+        vehicle_type TEXT DEFAULT 'CAR',
+        vehicle_number TEXT,
+        available_seats INTEGER DEFAULT 3,
+        cost_per_seat NUMERIC DEFAULT 0,
+        notes TEXT,
+        status TEXT DEFAULT 'OPEN',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS staff_reviews (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        staff_id TEXT NOT NULL,
+        resident_id TEXT NOT NULL,
+        resident_name TEXT NOT NULL,
+        flat_number TEXT NOT NULL,
+        wing TEXT NOT NULL,
+        rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+        review_text TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS blood_requests (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        requester_id TEXT NOT NULL,
+        requester_name TEXT NOT NULL,
+        flat_number TEXT NOT NULL,
+        wing TEXT,
+        blood_group_needed TEXT NOT NULL,
+        patient_name TEXT,
+        hospital_name TEXT NOT NULL,
+        contact_phone TEXT NOT NULL,
+        units_needed INTEGER DEFAULT 1,
+        urgency TEXT DEFAULT 'URGENT',
+        status TEXT DEFAULT 'ACTIVE',
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rule_violations (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        reported_by_id TEXT NOT NULL,
+        reported_by_name TEXT NOT NULL,
+        reported_by_flat TEXT,
+        reported_by_wing TEXT,
+        violator_flat TEXT,
+        violator_wing TEXT,
+        violator_vehicle_number TEXT,
+        violation_type TEXT NOT NULL,
+        description TEXT NOT NULL,
+        photo_url TEXT,
+        fine_amount NUMERIC DEFAULT 0,
+        status TEXT DEFAULT 'REPORTED',
+        committee_notes TEXT,
+        resolved_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Extended migration alters for core tables
+    try {
+      await client.query(`ALTER TABLE visitors ADD COLUMN IF NOT EXISTS passcode TEXT`);
+      await client.query(`ALTER TABLE visitors ADD COLUMN IF NOT EXISTS passcode_type TEXT`);
+      await client.query(`ALTER TABLE visitors ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ`);
+      await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_vendor_name TEXT`);
+      await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_end_date DATE`);
+      await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_cost NUMERIC`);
+      await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS avg_rating NUMERIC DEFAULT 5.0`);
+      await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS total_reviews INTEGER DEFAULT 0`);
+    } catch (_) {}
+
+    // Auto-seed default RBAC roles and permissions
+    await seedDefaultTenantRBAC(client);
   } finally {
     client.release();
   }
   return schema;
+};
+
+const ensureTenantFeatureTables = async (tenantId) => {
+  if (!pool) return;
+  const schema = getTenantSchemaName(tenantId);
+  const client = await pool.connect();
+  try {
+    await client.query(`SET search_path TO "${schema}", platform, public`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS parcels (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        flat_number TEXT NOT NULL,
+        wing TEXT NOT NULL,
+        recipient_name TEXT,
+        delivery_company TEXT NOT NULL,
+        tracking_number TEXT,
+        parcel_count INTEGER DEFAULT 1,
+        pickup_pin TEXT NOT NULL,
+        status TEXT DEFAULT 'AT_GATE',
+        photo_url TEXT,
+        notes TEXT,
+        received_by_guard_id TEXT,
+        collected_by_name TEXT,
+        collected_at TIMESTAMPTZ,
+        returned_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS move_requests (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        user_id TEXT,
+        request_type TEXT NOT NULL,
+        applicant_name TEXT NOT NULL,
+        applicant_phone TEXT NOT NULL,
+        applicant_email TEXT,
+        flat_number TEXT NOT NULL,
+        wing TEXT NOT NULL,
+        move_date DATE NOT NULL,
+        time_slot TEXT NOT NULL,
+        vehicle_number TEXT,
+        mover_agency TEXT,
+        status TEXT DEFAULT 'PENDING',
+        rejection_reason TEXT,
+        approved_by TEXT,
+        approved_at TIMESTAMPTZ,
+        certificate_number TEXT,
+        verification_token TEXT,
+        documents JSONB DEFAULT '[]'::jsonb,
+        lift_charges_paid INTEGER DEFAULT 0,
+        security_deposit NUMERIC DEFAULT 0,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS marketplace_items (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        seller_id TEXT NOT NULL,
+        seller_name TEXT NOT NULL,
+        seller_flat TEXT NOT NULL,
+        seller_wing TEXT NOT NULL,
+        seller_phone TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        category TEXT NOT NULL,
+        listing_type TEXT DEFAULT 'SELL',
+        price NUMERIC DEFAULT 0,
+        original_price NUMERIC,
+        condition TEXT DEFAULT 'GOOD',
+        photos JSONB DEFAULT '[]'::jsonb,
+        status TEXT DEFAULT 'AVAILABLE',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS carpools (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        driver_id TEXT NOT NULL,
+        driver_name TEXT NOT NULL,
+        driver_flat TEXT NOT NULL,
+        driver_wing TEXT NOT NULL,
+        driver_phone TEXT,
+        origin TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        departure_date DATE NOT NULL,
+        departure_time TEXT NOT NULL,
+        vehicle_type TEXT DEFAULT 'CAR',
+        vehicle_number TEXT,
+        available_seats INTEGER DEFAULT 3,
+        cost_per_seat NUMERIC DEFAULT 0,
+        notes TEXT,
+        status TEXT DEFAULT 'OPEN',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS staff_reviews (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        staff_id TEXT NOT NULL,
+        resident_id TEXT NOT NULL,
+        resident_name TEXT NOT NULL,
+        flat_number TEXT NOT NULL,
+        wing TEXT NOT NULL,
+        rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+        review_text TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS blood_requests (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        requester_id TEXT NOT NULL,
+        requester_name TEXT NOT NULL,
+        flat_number TEXT NOT NULL,
+        wing TEXT,
+        blood_group_needed TEXT NOT NULL,
+        patient_name TEXT,
+        hospital_name TEXT NOT NULL,
+        contact_phone TEXT NOT NULL,
+        units_needed INTEGER DEFAULT 1,
+        urgency TEXT DEFAULT 'URGENT',
+        status TEXT DEFAULT 'ACTIVE',
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rule_violations (
+        id TEXT PRIMARY KEY,
+        society_id TEXT NOT NULL,
+        reported_by_id TEXT NOT NULL,
+        reported_by_name TEXT NOT NULL,
+        reported_by_flat TEXT,
+        reported_by_wing TEXT,
+        violator_flat TEXT,
+        violator_wing TEXT,
+        violator_vehicle_number TEXT,
+        violation_type TEXT NOT NULL,
+        description TEXT NOT NULL,
+        photo_url TEXT,
+        fine_amount NUMERIC DEFAULT 0,
+        status TEXT DEFAULT 'REPORTED',
+        committee_notes TEXT,
+        resolved_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    try {
+      await client.query(`ALTER TABLE visitors ADD COLUMN IF NOT EXISTS passcode TEXT`);
+      await client.query(`ALTER TABLE visitors ADD COLUMN IF NOT EXISTS passcode_type TEXT`);
+      await client.query(`ALTER TABLE visitors ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ`);
+      await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_vendor_name TEXT`);
+      await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_end_date DATE`);
+      await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_cost NUMERIC`);
+      await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS avg_rating NUMERIC DEFAULT 5.0`);
+      await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS total_reviews INTEGER DEFAULT 0`);
+    } catch (_) {}
+  } catch (err) {
+    console.error('Error ensuring tenant feature tables:', err);
+  } finally {
+    client.release();
+  }
+};
+
+const seedDefaultTenantRBAC = async (client) => {
+  const defaultPermissions = [
+    { module: 'NOTICE', action: 'CREATE', code: 'NOTICE_CREATE' },
+    { module: 'NOTICE', action: 'PUBLISH', code: 'NOTICE_PUBLISH' },
+    { module: 'BILLING', action: 'APPROVE', code: 'BILL_APPROVE' },
+    { module: 'USER', action: 'CREATE', code: 'USER_CREATE' },
+    { module: 'COMPLAINT', action: 'ASSIGN', code: 'COMPLAINT_ASSIGN' },
+    { module: 'SOCIETY', action: 'MANAGE', code: 'SOCIETY_MANAGE' },
+    { module: 'VOUCHER', action: 'CREATE', code: 'VOUCHER_CREATE' },
+    { module: 'VOUCHER', action: 'APPROVE', code: 'VOUCHER_APPROVE' },
+    { module: 'VOUCHER', action: 'VIEW', code: 'VOUCHER_VIEW' },
+    { module: 'BILLING', action: 'CREATE', code: 'BILLING_CREATE' },
+    { module: 'BILLING', action: 'APPROVE', code: 'BILLING_APPROVE' },
+    { module: 'LEDGER', action: 'VIEW', code: 'LEDGER_VIEW' },
+    { module: 'TAX', action: 'VIEW', code: 'TAX_VIEW' },
+    { module: 'TAX', action: 'MANAGE', code: 'TAX_MANAGE' },
+    { module: 'REPORT', action: 'VIEW', code: 'REPORT_VIEW' },
+    { module: 'VISITOR', action: 'MANAGE', code: 'VISITOR_MANAGE' },
+    { module: 'PATROL', action: 'MANAGE', code: 'PATROL_MANAGE' },
+    { module: 'SOS', action: 'RESPOND', code: 'SOS_RESPOND' },
+    { module: 'VENDOR', action: 'MANAGE', code: 'VENDOR_MANAGE' },
+    { module: 'VEHICLE', action: 'MANAGE', code: 'VEHICLE_MANAGE' },
+    { module: 'TENANT', action: 'MANAGE', code: 'TENANT_MANAGE' },
+    { module: 'STAFF', action: 'MANAGE', code: 'STAFF_MANAGE' },
+    { module: 'MEETING', action: 'MANAGE', code: 'MEETING_MANAGE' },
+    { module: 'FACILITY', action: 'MANAGE', code: 'FACILITY_MANAGE' },
+    { module: 'DOCUMENT', action: 'MANAGE', code: 'DOCUMENT_MANAGE' },
+    { module: 'COMPLIANCE', action: 'MANAGE', code: 'COMPLIANCE_MANAGE' },
+    { module: 'ASSET', action: 'MANAGE', code: 'ASSET_MANAGE' },
+    { module: 'ACCOUNTING', action: 'MANAGE', code: 'ACCOUNTING_MANAGE' },
+    { module: 'AUDIT', action: 'VIEW', code: 'AUDIT_VIEW' },
+    { module: 'EMERGENCY', action: 'MANAGE', code: 'EMERGENCY_MANAGE' },
+    { module: 'NOTIFICATION', action: 'MANAGE', code: 'NOTIFICATION_MANAGE' },
+    { module: 'PLAN', action: 'MANAGE', code: 'PLAN_MANAGE' }
+  ];
+
+  for (const p of defaultPermissions) {
+    await client.query(
+      `INSERT INTO permissions (id, module, action, code) 
+       VALUES ($1, $2, $3, $4) 
+       ON CONFLICT (code) DO NOTHING`,
+      [uuidv4(), p.module, p.action, p.code]
+    );
+  }
+
+  const defaultRoles = [
+    { code: 'SOCIETY_ADMIN', name: 'Society Admin', description: 'Full access to society' },
+    { code: 'FINANCE_MANAGER', name: 'Finance Manager', description: 'Manage finances & accounting' },
+    { code: 'TREASURY_MAKER', name: 'Treasury Maker', description: 'Creates vouchers & bills' },
+    { code: 'TREASURY_CHECKER', name: 'Treasury Checker', description: 'Approves vouchers & bills' },
+    { code: 'COMMITTEE_MEMBER', name: 'Committee Member', description: 'Committee oversight access' },
+    { code: 'GUARD', name: 'Security Guard', description: 'Gate, patrol, visitor, & SOS response' },
+    { code: 'RESIDENT', name: 'Resident', description: 'Resident basic access' }
+  ];
+
+  for (const r of defaultRoles) {
+    await client.query(
+      `INSERT INTO roles (id, code, name, description) 
+       VALUES ($1, $2, $3, $4) 
+       ON CONFLICT (code) DO NOTHING`,
+      [uuidv4(), r.code, r.name, r.description]
+    );
+  }
+
+  // Get permission IDs
+  const permsRows = await client.query('SELECT id, code FROM permissions');
+  const permsMap = {};
+  permsRows.rows.forEach(p => { permsMap[p.code] = p.id; });
+
+  // Get role IDs
+  const rolesRows = await client.query('SELECT id, code FROM roles');
+  const rolesMap = {};
+  rolesRows.rows.forEach(r => { rolesMap[r.code] = r.id; });
+
+  const rolePermMap = {
+    SOCIETY_ADMIN: Object.keys(permsMap),
+    FINANCE_MANAGER: [
+      'BILL_APPROVE', 'BILLING_CREATE', 'BILLING_APPROVE', 'VOUCHER_CREATE', 
+      'VOUCHER_APPROVE', 'VOUCHER_VIEW', 'LEDGER_VIEW', 'TAX_VIEW', 'TAX_MANAGE', 
+      'REPORT_VIEW', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW'
+    ],
+    TREASURY_MAKER: [
+      'VOUCHER_CREATE', 'VOUCHER_VIEW', 'BILLING_CREATE', 'LEDGER_VIEW', 'TAX_VIEW', 'REPORT_VIEW'
+    ],
+    TREASURY_CHECKER: [
+      'VOUCHER_APPROVE', 'VOUCHER_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'LEDGER_VIEW', 'TAX_VIEW', 'TAX_MANAGE', 'REPORT_VIEW'
+    ],
+    COMMITTEE_MEMBER: [
+      'NOTICE_CREATE', 'COMPLAINT_ASSIGN', 'VOUCHER_VIEW', 'REPORT_VIEW', 'MEETING_MANAGE', 'FACILITY_MANAGE', 'DOCUMENT_MANAGE', 'SOS_RESPOND'
+    ],
+    GUARD: [
+      'VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'
+    ],
+    RESIDENT: []
+  };
+
+  for (const [roleCode, permList] of Object.entries(rolePermMap)) {
+    const roleId = rolesMap[roleCode];
+    if (!roleId) continue;
+    for (const pCode of permList) {
+      const pId = permsMap[pCode];
+      if (pId) {
+        await client.query(
+          `INSERT INTO role_permissions (role_id, permission_id) 
+           VALUES ($1, $2) 
+           ON CONFLICT DO NOTHING`,
+          [roleId, pId]
+        );
+      }
+    }
+  }
+
+  const defaultPositions = [
+    { code: 'SECRETARY', name: 'Secretary', is_elected: 1, hierarchy_order: 1, roles: ['SOCIETY_ADMIN'] },
+    { code: 'TREASURER', name: 'Treasurer', is_elected: 1, hierarchy_order: 2, roles: ['FINANCE_MANAGER'] },
+    { code: 'TREASURY_MAKER', name: 'Treasury Maker', is_elected: 0, hierarchy_order: 3, roles: ['TREASURY_MAKER'] },
+    { code: 'TREASURY_CHECKER', name: 'Treasury Checker', is_elected: 0, hierarchy_order: 4, roles: ['TREASURY_CHECKER'] },
+    { code: 'MEMBER', name: 'Committee Member', is_elected: 1, hierarchy_order: 5, roles: ['COMMITTEE_MEMBER'] },
+    { code: 'GUARD', name: 'Security Guard', is_elected: 0, hierarchy_order: 6, roles: ['GUARD'] },
+    { code: 'RESIDENT', name: 'Resident', is_elected: 0, hierarchy_order: 10, roles: ['RESIDENT'] }
+  ];
+
+  for (const pos of defaultPositions) {
+    await client.query(
+      `INSERT INTO position_master (id, code, name, is_elected, hierarchy_order, is_system_defined) 
+       VALUES ($1, $2, $3, $4, $5, 1) 
+       ON CONFLICT (code) DO NOTHING`,
+      [uuidv4(), pos.code, pos.name, pos.is_elected, pos.hierarchy_order]
+    );
+  }
+
+  const posRows = await client.query('SELECT id, code FROM position_master');
+  const posMap = {};
+  posRows.rows.forEach(p => { posMap[p.code] = p.id; });
+
+  for (const pos of defaultPositions) {
+    const posId = posMap[pos.code];
+    if (!posId) continue;
+    for (const rCode of pos.roles) {
+      const rId = rolesMap[rCode];
+      if (rId) {
+        await client.query(
+          `INSERT INTO position_roles (position_id, role_id) 
+           VALUES ($1, $2) 
+           ON CONFLICT DO NOTHING`,
+          [posId, rId]
+        );
+      }
+    }
+  }
 };
 
 const withTenant = async (tenantId, callback) => {
@@ -421,5 +931,7 @@ module.exports = {
   ensurePlatformSchema,
   ensurePlatformSocietiesSchema,
   createTenantSchema,
+  ensureTenantFeatureTables,
+  seedDefaultTenantRBAC,
   withTenant
 };

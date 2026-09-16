@@ -54,7 +54,13 @@ exports.getById = (req, res) => {
   try {
     if (isPostgresEnabled) {
       return (async () => {
-        const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.params.id]);
+        let query = 'SELECT * FROM platform.users WHERE id = $1';
+        let params = [req.params.id];
+        if (req.user.role !== 'PLATFORM_ADMIN') {
+          query += ' AND society_id = $2';
+          params.push(req.user.society_id);
+        }
+        const r = await pool.query(query + ' LIMIT 1', params);
         const member = r.rows[0];
         if (!member) return res.status(404).json({ error: 'Member not found' });
         return res.json({ member: safeUser(member) });
@@ -63,6 +69,9 @@ exports.getById = (req, res) => {
     const db = getDb();
     const member = db.get('users').find({ id: req.params.id }).value();
     if (!member) return res.status(404).json({ error: 'Member not found' });
+    if (req.user.role !== 'PLATFORM_ADMIN' && member.society_id !== req.user.society_id) {
+      return res.status(403).json({ error: 'Cross-tenant access denied' });
+    }
     res.json({ member: safeUser(member) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch member' });
@@ -139,13 +148,24 @@ exports.update = (req, res) => {
           }
         });
         values.push(req.params.id);
+        let whereClause = `WHERE id = $${values.length}`;
+        if (req.user.role !== 'PLATFORM_ADMIN') {
+          values.push(req.user.society_id);
+          whereClause += ` AND society_id = $${values.length}`;
+        }
         const setClause = setParts.length ? `${setParts.join(', ')}, updated_at = NOW()` : 'updated_at = NOW()';
-        await pool.query(`UPDATE platform.users SET ${setClause} WHERE id = $${values.length}`, values);
+        const result = await pool.query(`UPDATE platform.users SET ${setClause} ${whereClause}`, values);
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Member not found or unauthorized' });
         const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.params.id]);
         return res.json({ member: safeUser(r.rows[0]) });
       })().catch(() => res.status(500).json({ error: 'Failed to update member' }));
     }
     const db = getDb();
+    const existingMember = db.get('users').find({ id: req.params.id }).value();
+    if (!existingMember) return res.status(404).json({ error: 'Member not found' });
+    if (req.user.role !== 'PLATFORM_ADMIN' && existingMember.society_id !== req.user.society_id) {
+      return res.status(403).json({ error: 'Cross-tenant access denied' });
+    }
     const updates = {};
     ['first_name', 'last_name', 'phone', 'role', 'flat_number', 'wing'].forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
     updates.updated_at = new Date().toISOString();
@@ -161,11 +181,23 @@ exports.deactivate = (req, res) => {
   try {
     if (isPostgresEnabled) {
       return (async () => {
-        await pool.query('UPDATE platform.users SET is_active = 0, updated_at = NOW() WHERE id = $1', [req.params.id]);
+        let query = 'UPDATE platform.users SET is_active = 0, updated_at = NOW() WHERE id = $1';
+        let params = [req.params.id];
+        if (req.user.role !== 'PLATFORM_ADMIN') {
+          query += ' AND society_id = $2';
+          params.push(req.user.society_id);
+        }
+        const result = await pool.query(query, params);
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Member not found or unauthorized' });
         return res.json({ message: 'Member deactivated successfully' });
       })().catch(() => res.status(500).json({ error: 'Failed to deactivate member' }));
     }
     const db = getDb();
+    const existing = db.get('users').find({ id: req.params.id }).value();
+    if (!existing) return res.status(404).json({ error: 'Member not found' });
+    if (req.user.role !== 'PLATFORM_ADMIN' && existing.society_id !== req.user.society_id) {
+      return res.status(403).json({ error: 'Cross-tenant access denied' });
+    }
     db.get('users').find({ id: req.params.id }).assign({ is_active: 0, updated_at: new Date().toISOString() }).write();
     res.json({ message: 'Member deactivated successfully' });
   } catch (error) {

@@ -232,15 +232,25 @@ exports.approveBill = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureTenantBillingTables(client);
+        const { rows } = await client.query('SELECT created_by, status FROM bills WHERE id = $1', [req.params.id]);
+        if (!rows.length) return res.status(404).json({ error: 'Bill not found' });
+        if (rows[0].created_by === req.user.id && req.user.role !== 'PLATFORM_ADMIN') {
+          return res.status(403).json({ error: 'MAKER_CHECKER_VIOLATION: You cannot approve a bill that you created.' });
+        }
         await client.query('UPDATE bills SET status = $1, approved_by = $2, updated_at = NOW() WHERE id = $3', ['APPROVED', req.user.id, req.params.id]);
         const r = await client.query('SELECT * FROM bills WHERE id = $1 LIMIT 1', [req.params.id]);
         return res.json({ bill: r.rows[0], message: 'Bill approved' });
-      }).catch(() => res.status(500).json({ error: 'Failed to approve bill' }));
+      }).catch((e) => res.status(500).json({ error: e.message || 'Failed to approve bill' }));
     }
     const db = getDb();
-    db.get('bills').find({ id: req.params.id }).assign({ status: 'APPROVED', approved_by: req.user.id, updated_at: new Date().toISOString() }).write();
     const bill = db.get('bills').find({ id: req.params.id }).value();
-    res.json({ bill, message: 'Bill approved' });
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+    if (bill.created_by === req.user.id && req.user.role !== 'PLATFORM_ADMIN') {
+      return res.status(403).json({ error: 'MAKER_CHECKER_VIOLATION: You cannot approve a bill that you created.' });
+    }
+    db.get('bills').find({ id: req.params.id }).assign({ status: 'APPROVED', approved_by: req.user.id, updated_at: new Date().toISOString() }).write();
+    const updatedBill = db.get('bills').find({ id: req.params.id }).value();
+    res.json({ bill: updatedBill, message: 'Bill approved' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to approve bill' });
   }

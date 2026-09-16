@@ -205,3 +205,156 @@ exports.todayCount = (req, res) => {
     res.status(500).json({ error: 'Failed to get count' });
   }
 };
+
+exports.generatePasscode = (req, res) => {
+  try {
+    const { visitor_name, visitor_phone, purpose, flat_id, valid_hours } = req.body;
+    if (!visitor_name) return res.status(400).json({ error: 'Visitor name is required' });
+
+    const passcode = Math.floor(1000 + Math.random() * 9000).toString();
+    const hours = parseFloat(valid_hours) || 24;
+    const validUntil = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
+    const id = uuidv4();
+
+    const visitor = {
+      id,
+      society_id: req.user.society_id,
+      visitor_name,
+      visitor_phone: visitor_phone || null,
+      purpose: purpose || 'Guest Visit',
+      flat_id: flat_id || req.user.flat_number || 'N/A',
+      visiting_member_id: req.user.id,
+      vehicle_number: null,
+      check_in: null,
+      check_out: null,
+      status: 'PRE_APPROVED',
+      passcode,
+      passcode_type: 'GUEST_PASS',
+      valid_until: validUntil,
+      approved_by: req.user.id,
+      guard_notes: null,
+      created_at: now
+    };
+
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureVisitorTable(client);
+        await client.query(`
+          INSERT INTO visitors (
+            id, society_id, visitor_name, visitor_phone, purpose, flat_id,
+            visiting_member_id, status, passcode, passcode_type, valid_until,
+            approved_by, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        `, [
+          visitor.id, visitor.society_id, visitor.visitor_name, visitor.visitor_phone,
+          visitor.purpose, visitor.flat_id, visitor.visiting_member_id, visitor.status,
+          visitor.passcode, visitor.passcode_type, visitor.valid_until, visitor.approved_by
+        ]);
+        return res.status(201).json({ success: true, visitor });
+      }).catch((err) => {
+        console.error('Generate visitor passcode error:', err);
+        return res.status(500).json({ error: 'Failed to generate guest pass' });
+      });
+    }
+
+    const db = getDb();
+    db.get('visitors').push(visitor).write();
+    return res.status(201).json({ success: true, visitor });
+  } catch (error) {
+    return res.status(500).json({ error: 'Server error generating passcode' });
+  }
+};
+
+exports.verifyPasscode = (req, res) => {
+  try {
+    const { passcode, flat_number } = req.body;
+    if (!passcode) return res.status(400).json({ error: 'Passcode is required' });
+
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureVisitorTable(client);
+        let q = `
+          SELECT * FROM visitors 
+          WHERE society_id = $1 AND passcode = $2 AND status = 'PRE_APPROVED'
+        `;
+        let params = [req.user.society_id, passcode.toString().trim()];
+        if (flat_number) {
+          params.push(flat_number.toString().trim());
+          q += ` AND flat_id = $3`;
+        }
+        q += ' ORDER BY created_at DESC LIMIT 1';
+        const r = await client.query(q, params);
+        if (r.rows.length === 0) {
+          return res.status(404).json({ error: 'Invalid or expired passcode' });
+        }
+        const visitor = r.rows[0];
+        if (visitor.valid_until && new Date(visitor.valid_until) < new Date()) {
+          return res.status(400).json({ error: 'This guest passcode has expired' });
+        }
+
+        // Check in visitor
+        await client.query(`
+          UPDATE visitors 
+          SET status = 'CHECKED_IN', check_in = NOW() 
+          WHERE id = $1
+        `, [visitor.id]);
+
+        return res.json({ success: true, message: 'Passcode verified! Guest checked in.', visitor: { ...visitor, status: 'CHECKED_IN' } });
+      });
+    }
+
+    const db = getDb();
+    const visitor = db.get('visitors').find(v => 
+      v.society_id === req.user.society_id && 
+      v.passcode === passcode.toString().trim() && 
+      v.status === 'PRE_APPROVED'
+    ).value();
+
+    if (!visitor) return res.status(404).json({ error: 'Invalid or expired passcode' });
+    if (visitor.valid_until && new Date(visitor.valid_until) < new Date()) {
+      return res.status(400).json({ error: 'Passcode expired' });
+    }
+
+    db.get('visitors').find({ id: visitor.id }).assign({ status: 'CHECKED_IN', check_in: new Date().toISOString() }).write();
+    return res.json({ success: true, message: 'Passcode verified! Guest checked in.', visitor: { ...visitor, status: 'CHECKED_IN' } });
+  } catch (error) {
+    return res.status(500).json({ error: 'Server error verifying passcode' });
+  }
+};
+
+exports.getOverstaying = (req, res) => {
+  try {
+    const hours = parseFloat(req.query.hours) || 3;
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureVisitorTable(client);
+        const q = `
+          SELECT *, 
+            ROUND(EXTRACT(EPOCH FROM (NOW() - check_in)) / 3600, 1) as hours_inside
+          FROM visitors
+          WHERE society_id = $1 
+            AND status = 'CHECKED_IN'
+            AND check_out IS NULL 
+            AND check_in < NOW() - ($2 || ' hours')::INTERVAL
+          ORDER BY check_in ASC
+        `;
+        const r = await client.query(q, [req.user.society_id, hours.toString()]);
+        return res.json({ overstaying: r.rows });
+      });
+    }
+
+    const db = getDb();
+    const cutoff = Date.now() - hours * 60 * 60 * 1000;
+    const overstaying = (db.get('visitors').value() || [])
+      .filter(v => v.society_id === req.user.society_id && v.status === 'CHECKED_IN' && !v.check_out && new Date(v.check_in).getTime() < cutoff)
+      .map(v => ({
+        ...v,
+        hours_inside: Math.round(((Date.now() - new Date(v.check_in).getTime()) / 3600000) * 10) / 10
+      }));
+    return res.json({ overstaying });
+  } catch (error) {
+    return res.status(500).json({ error: 'Server error fetching overstaying visitors' });
+  }
+};
+

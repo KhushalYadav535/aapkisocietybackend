@@ -12,7 +12,7 @@ exports.importMembers = async (req, res) => {
     }
 
     const { members, society_id } = req.body;
-    const targetSociety = society_id || req.user.society_id;
+    const targetSociety = (isPlatformRole(role) && society_id) ? society_id : req.user.society_id;
     if (!targetSociety) return res.status(400).json({ error: 'society_id is required' });
     if (!Array.isArray(members) || members.length === 0) {
       return res.status(400).json({ error: 'members array is required' });
@@ -73,7 +73,7 @@ exports.importFlats = async (req, res) => {
     }
 
     const { flats, society_id } = req.body;
-    const targetSociety = society_id || req.user.society_id;
+    const targetSociety = (isPlatformRole(role) && society_id) ? society_id : req.user.society_id;
     if (!targetSociety) return res.status(400).json({ error: 'society_id is required' });
     if (!Array.isArray(flats) || flats.length === 0) {
       return res.status(400).json({ error: 'flats array is required' });

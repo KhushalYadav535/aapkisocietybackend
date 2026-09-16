@@ -14,4 +14,8 @@ router.post('/mark-absent', requirePermission('STAFF_MANAGE'), staffController.m
 router.get('/summary', staffController.getSummary);
 router.delete('/:id', requirePermission('STAFF_MANAGE'), staffController.deactivate);
 
+// Staff Ratings & Reviews
+router.get('/reviews', staffController.getReviews);
+router.post('/reviews', staffController.addReview);
+
 module.exports = router;

@@ -85,6 +85,9 @@ const requirePermission = (permissionCode) => {
     if (role === 'ADMIN' || role === 'PLATFORM_ADMIN') {
       return next();
     }
+    if (role === 'GUARD' && ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'].includes(permissionCode)) {
+      return next();
+    }
 
     const societyId = req.query.society_id || req.body.society_id || req.params.societyId || req.user.society_id;
     if (!societyId) {
@@ -130,4 +133,4 @@ const requirePermission = (permissionCode) => {
   };
 };
 
-module.exports = { authenticate, authorize, requireMFA, requirePermission };
+module.exports = { authenticate, auth: authenticate, authorize, requireMFA, requirePermission };

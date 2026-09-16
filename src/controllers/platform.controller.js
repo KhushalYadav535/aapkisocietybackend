@@ -388,6 +388,40 @@ exports.approveKYC = async (req, res) => {
       WHERE id = $5
     `, [ONBOARDING_STATES.SCHEMA_PROVISIONED, 'TRIAL', req.user.id, comment || null, society_id]);
 
+    // Ensure an Admin user exists for contact_email so the society admin can login
+    if (society.contact_email) {
+      const existingUser = await pool.query('SELECT id FROM platform.users WHERE email = $1 LIMIT 1', [society.contact_email.toLowerCase()]);
+      let adminUserId;
+      if (!existingUser.rows.length) {
+        adminUserId = uuidv4();
+        const defaultPassword = 'Welcome@123';
+        const passwordHash = await bcrypt.hash(defaultPassword, 12);
+        const nameParts = (society.contact_name || 'Society Admin').split(' ');
+        const firstName = nameParts[0] || 'Society';
+        const lastName = nameParts.slice(1).join(' ') || 'Admin';
+
+        await pool.query(`
+          INSERT INTO platform.users (id, email, password, first_name, last_name, role, society_id, phone, is_active, is_verified, mfa_enabled, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, 'ADMIN', $6, $7, 1, 1, 0, NOW(), NOW())
+        `, [adminUserId, society.contact_email.toLowerCase(), passwordHash, firstName, lastName, society_id, society.contact_phone || null]);
+      } else {
+        adminUserId = existingUser.rows[0].id;
+        await pool.query('UPDATE platform.users SET society_id = $1 WHERE id = $2', [society_id, adminUserId]);
+      }
+
+      // Assign SECRETARY position to this Admin in the tenant schema
+      const secPos = await pool.query(`SELECT id FROM "${schemaName}".position_master WHERE code = 'SECRETARY'`);
+      if (secPos.rows.length) {
+        const oneYearLater = new Date();
+        oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
+        await pool.query(`
+          INSERT INTO "${schemaName}".society_position_assignments (id, user_id, position_id, start_date, end_date, status)
+          VALUES ($1, $2, $3, CURRENT_DATE, $4, 'ACTIVE')
+          ON CONFLICT DO NOTHING
+        `, [uuidv4(), adminUserId, secPos.rows[0].id, oneYearLater.toISOString().split('T')[0]]);
+      }
+    }
+
     const soc = (await pool.query('SELECT contact_email, name FROM platform.societies WHERE id = $1', [society_id])).rows[0];
     if (soc?.contact_email) sendWelcomeEmail(soc.contact_email, soc.name, schemaName).catch(e => console.error('Welcome email failed:', e.message));
     await logAudit(req, 'KYC_APPROVED', 'SOCIETY', society_id, null, { approved_by: req.user.id });

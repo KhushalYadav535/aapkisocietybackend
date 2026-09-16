@@ -22,5 +22,10 @@ router.put('/:id/checkout', requirePermission('VISITOR_MANAGE'), visitorControll
 router.put('/:id/approve', requirePermission('VISITOR_MANAGE'), visitorController.approve);
 router.get('/today/count', visitorController.todayCount);
 
+// Digital Passcode & Overstay Detection
+router.post('/passcode', visitorController.generatePasscode);
+router.post('/verify-passcode', visitorController.verifyPasscode);
+router.get('/monitor/overstaying', visitorController.getOverstaying);
+
 module.exports = router;
 

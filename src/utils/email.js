@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { normalizePhone } = require('./phone');
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -70,6 +71,85 @@ const sendReUploadRequestEmail = (to, societyName, remarks) =>
       <a href="${PLATFORM_URL}/dashboard/societies" style="display:inline-block;padding:12px 24px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;margin:16px 0">Re-Upload Documents</a>
     </div>`);
 
+const sendDemoBookingNotificationEmail = async (booking) => {
+  const recipients = process.env.DEMO_NOTIFICATION_EMAILS || 'khushalyadav535@gmail.com';
+  const societyName = booking.societyName || booking.society_name || 'New Society';
+  const city = booking.city || 'Not specified';
+  const flatCount = booking.flatCount || booking.flat_count || 100;
+  const name = booking.name || 'Lead';
+  const phone = booking.phone || '';
+  const email = booking.email || '';
+  
+  const phoneData = normalizePhone(phone);
+  const waTarget = phoneData.waPhone || phone;
+  const displayPhone = phoneData.display || phone;
+  const telNumber = phoneData.clean || phone;
+  const waLink = `https://wa.me/${waTarget}?text=${encodeURIComponent(`Hello ${name}! Thank you for requesting a demo of AapkiSociety for ${societyName}. When would be a good time for a quick 10-minute walkthrough?`)}`;
+
+  const subject = `🎉 New Demo Walkthrough: ${societyName} (${flatCount} Flats, ${city}) - AapkiSociety`;
+
+  const html = `
+    <div style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;max-width:600px;margin:auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.06);">
+      <div style="background:linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);padding:28px 24px;text-align:center;color:#ffffff;">
+        <h1 style="margin:0;font-size:22px;font-weight:800;letter-spacing:-0.5px;">🎉 New Demo Walkthrough Scheduled!</h1>
+        <p style="margin:8px 0 0 0;font-size:13px;color:#e0e7ff;font-weight:500;">
+          A prospective society committee member requested a 1-on-1 demo from the website.
+        </p>
+      </div>
+
+      <div style="padding:28px 24px;">
+        <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:11px 0;font-size:12px;font-weight:700;color:#64748b;width:38%;">Society Name</td>
+            <td style="padding:11px 0;font-size:15px;font-weight:700;color:#0f172a;">${societyName}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:11px 0;font-size:12px;font-weight:700;color:#64748b;">City / Region</td>
+            <td style="padding:11px 0;font-size:14px;font-weight:600;color:#0f172a;">${city}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:11px 0;font-size:12px;font-weight:700;color:#64748b;">Total Units / Flats</td>
+            <td style="padding:11px 0;font-size:14px;font-weight:800;color:#4f46e5;">${flatCount} Flats</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:11px 0;font-size:12px;font-weight:700;color:#64748b;">Contact Person</td>
+            <td style="padding:11px 0;font-size:14px;font-weight:700;color:#0f172a;">${name}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:11px 0;font-size:12px;font-weight:700;color:#64748b;">WhatsApp Phone</td>
+            <td style="padding:11px 0;font-size:15px;font-weight:700;color:#059669;">
+              <a href="tel:${telNumber}" style="color:#059669;text-decoration:none;">${displayPhone}</a>
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:11px 0;font-size:12px;font-weight:700;color:#64748b;">Email Address</td>
+            <td style="padding:11px 0;font-size:14px;font-weight:600;color:#0f172a;">
+              ${email ? `<a href="mailto:${email}" style="color:#2563eb;text-decoration:none;">${email}</a>` : '<span style="color:#94a3b8;font-weight:normal;">Not provided</span>'}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:11px 0;font-size:12px;font-weight:700;color:#64748b;">Submission Time</td>
+            <td style="padding:11px 0;font-size:13px;font-weight:600;color:#64748b;">${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</td>
+          </tr>
+        </table>
+
+        <!-- Direct WhatsApp Action Button -->
+        <div style="text-align:center;margin:24px 0 12px 0;">
+          <a href="${waLink}" target="_blank" style="display:inline-block;padding:14px 28px;background:#25D366;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;border-radius:12px;box-shadow:0 4px 12px rgba(37,211,102,0.3);">
+            💬 Open WhatsApp Chat with ${name}
+          </a>
+        </div>
+      </div>
+
+      <div style="background:#f8fafc;padding:16px 24px;text-align:center;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;">
+        Delivered automatically to <strong style="color:#0f172a;">${recipients}</strong>
+      </div>
+    </div>
+  `;
+
+  return sendEmail(recipients, subject, html);
+};
+
 module.exports = {
   sendEmail,
   sendVerificationEmail,
@@ -77,4 +157,5 @@ module.exports = {
   sendKYCRejectionEmail,
   sendRenewalReminderEmail,
   sendReUploadRequestEmail,
+  sendDemoBookingNotificationEmail,
 };

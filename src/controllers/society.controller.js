@@ -1,6 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
-const { pool, isPostgresEnabled, createTenantSchema, ensurePlatformSocietiesSchema } = require('../config/postgres');
+const { pool, isPostgresEnabled, createTenantSchema, ensurePlatformSocietiesSchema, getTenantSchemaName } = require('../config/postgres');
 
 const ensureSocietyTables = async () => {
   if (!isPostgresEnabled) return;
@@ -128,6 +128,25 @@ exports.create = (req, res) => {
           [society.id, society.name, society.registration_number, society.address, society.city, society.state, society.pincode, society.gst_number, society.pan_number, society.total_units, society.total_wings, society.status, society.subscription_plan, society.subscription_status, JSON.stringify(society.active_modules), society.created_at, society.updated_at]
         );
         await createTenantSchema(society.id);
+
+        // If creator has no society_id yet, link them and assign SECRETARY position
+        if (req.user && req.user.id && !req.user.society_id) {
+          await pool.query('UPDATE platform.users SET society_id = $1, updated_at = NOW() WHERE id = $2', [society.id, req.user.id]);
+          req.user.society_id = society.id;
+
+          const schema = getTenantSchemaName(society.id);
+          const secPos = await pool.query(`SELECT id FROM "${schema}".position_master WHERE code = 'SECRETARY'`);
+          if (secPos.rows.length) {
+            const oneYearLater = new Date();
+            oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
+            await pool.query(`
+              INSERT INTO "${schema}".society_position_assignments (id, user_id, position_id, start_date, end_date, status)
+              VALUES ($1, $2, $3, CURRENT_DATE, $4, 'ACTIVE')
+              ON CONFLICT DO NOTHING
+            `, [uuidv4(), req.user.id, secPos.rows[0].id, oneYearLater.toISOString().split('T')[0]]);
+          }
+        }
+
         return res.status(201).json({ society });
       }).catch((error) => {
         console.error('Create society error:', error);
@@ -147,6 +166,10 @@ exports.create = (req, res) => {
       created_at: now, updated_at: now
     };
     db.get('societies').push(society).write();
+    if (req.user && req.user.id && !req.user.society_id) {
+      db.get('users').find({ id: req.user.id }).assign({ society_id: society.id }).write();
+      req.user.society_id = society.id;
+    }
     res.status(201).json({ society });
   } catch (error) {
     console.error('Create society error:', error);
@@ -446,3 +469,68 @@ exports.getHomeTypeMasters = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch home type masters' });
   }
 };
+
+exports.completeSetup = async (req, res) => {
+  try {
+    const { financial_year_start, wings, gst_number, bank_name, bank_account_number, bank_ifsc } = req.body;
+    
+    if (isPostgresEnabled) {
+      return ensureSocietyTables().then(async () => {
+        // Update society details and set onboarding_state to ACTIVE
+        await pool.query(
+          `UPDATE platform.societies 
+           SET gst_number = $1, bank_name = $2, bank_account_number = $3, bank_ifsc = $4,                settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{financial_year_start}', $5::jsonb),
+               onboarding_state = 'ACTIVE', updated_at = NOW() 
+           WHERE id = $6`,
+          [gst_number, bank_name, bank_account_number, bank_ifsc, JSON.stringify(financial_year_start || 'April'), req.params.id]
+        );
+
+        // Add wings
+        if (wings && Array.isArray(wings)) {
+          for (const w of wings) {
+            const wingId = uuidv4();
+            await pool.query(
+              `INSERT INTO platform.wings (id, society_id, name, total_floors, flats_per_floor, created_at) VALUES ($1, $2, $3, $4, $5, NOW())`,
+              [wingId, req.params.id, w.name, w.total_floors || 0, w.flats_per_floor || 0]
+            );
+          }
+        }
+        
+        return res.json({ message: 'Setup completed successfully', onboarding_state: 'ACTIVE' });
+      }).catch((e) => {
+        console.error(e);
+        res.status(500).json({ error: 'Failed to complete setup' });
+      });
+    }
+
+    const db = getDb();
+    
+    // Update society
+    db.get('societies').find({ id: req.params.id }).assign({
+      gst_number, bank_name, bank_account_number, bank_ifsc,
+      config: { financial_year_start: financial_year_start || 'April' },
+      onboarding_state: 'ACTIVE',
+      updated_at: new Date().toISOString()
+    }).write();
+
+    // Add wings
+    if (wings && Array.isArray(wings)) {
+      for (const w of wings) {
+        db.get('wings').push({
+          id: uuidv4(),
+          society_id: req.params.id,
+          name: w.name,
+          total_floors: w.total_floors || 0,
+          flats_per_floor: w.flats_per_floor || 0,
+          created_at: new Date().toISOString()
+        }).write();
+      }
+    }
+
+    res.json({ message: 'Setup completed successfully', onboarding_state: 'ACTIVE' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to complete setup' });
+  }
+};
+

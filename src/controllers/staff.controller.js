@@ -1,6 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
-const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
+const { pool, isPostgresEnabled, withTenant, ensurePlatformSchema } = require('../config/postgres');
 
 const ensureStaffTables = async (societyId) => {
   try {
@@ -314,5 +314,119 @@ exports.deactivate = (req, res) => {
     res.json({ message: 'Staff deactivated' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to deactivate staff' });
+  }
+};
+
+exports.addReview = async (req, res) => {
+  try {
+    const { staff_id, rating, review_text } = req.body;
+    const societyId = req.user.society_id;
+
+    if (!staff_id || !rating) {
+      return res.status(400).json({ error: 'Staff ID and rating (1-5) are required' });
+    }
+
+    const numRating = parseInt(rating);
+    if (isNaN(numRating) || numRating < 1 || numRating > 5) {
+      return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+    }
+
+    const reviewId = uuidv4();
+    const residentName = `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() || 'Resident';
+    const flatNumber = req.user.flat_number || 'N/A';
+    const wing = req.user.wing || 'A';
+
+    if (isPostgresEnabled) {
+      return withTenant(societyId, async (client) => {
+        await client.query(`
+          INSERT INTO staff_reviews (
+            id, society_id, staff_id, resident_id, resident_name,
+            flat_number, wing, rating, review_text, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        `, [reviewId, societyId, staff_id, req.user.id, residentName, flatNumber, wing, numRating, review_text || '']);
+
+        const aggRes = await client.query(`
+          SELECT ROUND(AVG(rating), 1) as avg_rating, COUNT(*)::int as total_reviews
+          FROM staff_reviews
+          WHERE staff_id = $1 AND society_id = $2
+        `, [staff_id, societyId]);
+
+        const avg = aggRes.rows[0]?.avg_rating || numRating;
+        const total = aggRes.rows[0]?.total_reviews || 1;
+
+        try {
+          await client.query(`
+            UPDATE staff SET avg_rating = $1, total_reviews = $2 WHERE id = $3
+          `, [avg, total, staff_id]);
+        } catch (_) {}
+
+        return res.status(201).json({
+          success: true,
+          review: { id: reviewId, staff_id, rating: numRating, review_text, resident_name: residentName, flat_number: flatNumber },
+          stats: { avg_rating: avg, total_reviews: total }
+        });
+      });
+    }
+
+    const db = getDb();
+    if (!db.get('staff_reviews').value()) {
+      db.set('staff_reviews', []).write();
+    }
+    const newRev = {
+      id: reviewId,
+      society_id: societyId,
+      staff_id,
+      resident_id: req.user.id,
+      resident_name: residentName,
+      flat_number: flatNumber,
+      wing,
+      rating: numRating,
+      review_text: review_text || '',
+      created_at: new Date().toISOString()
+    };
+    db.get('staff_reviews').push(newRev).write();
+
+    const allRevs = (db.get('staff_reviews').value() || []).filter(r => r.staff_id === staff_id);
+    const avg = Math.round((allRevs.reduce((acc, r) => acc + r.rating, 0) / allRevs.length) * 10) / 10;
+
+    return res.status(201).json({
+      success: true,
+      review: newRev,
+      stats: { avg_rating: avg, total_reviews: allRevs.length }
+    });
+  } catch (error) {
+    console.error('Add staff review error:', error);
+    return res.status(500).json({ error: 'Server error submitting review' });
+  }
+};
+
+exports.getReviews = async (req, res) => {
+  try {
+    const { staff_id } = req.query;
+    const societyId = req.user.society_id;
+
+    if (isPostgresEnabled) {
+      return withTenant(societyId, async (client) => {
+        let q = 'SELECT * FROM staff_reviews WHERE society_id = $1';
+        let params = [societyId];
+        if (staff_id) {
+          params.push(staff_id);
+          q += ` AND staff_id = $2`;
+        }
+        q += ' ORDER BY created_at DESC';
+        const r = await client.query(q, params);
+        return res.json({ reviews: r.rows });
+      });
+    }
+
+    const db = getDb();
+    let reviews = (db.get('staff_reviews').value() || []).filter(r => r.society_id === societyId);
+    if (staff_id) {
+      reviews = reviews.filter(r => r.staff_id === staff_id);
+    }
+    reviews.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    return res.json({ reviews });
+  } catch (error) {
+    return res.status(500).json({ error: 'Server error fetching reviews' });
   }
 };

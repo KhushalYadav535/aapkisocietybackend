@@ -224,29 +224,53 @@ exports.vote = (req, res) => {
     const { id } = req.params;
     const { option_id } = req.body;
     const userId = req.user.id;
+    const userFlat = req.user.flat_number;
+    const userWing = req.user.wing || 'A';
     const societyId = req.user.society_id;
     const now = new Date().toISOString();
 
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
-        const existing = await pool.query(`SELECT * FROM \"society_${societyId}\".poll_votes WHERE poll_id = $1 AND user_id = $2`, [id, userId]);
-        if (existing.rows.length > 0) return res.status(400).json({ error: 'Already voted' });
+        // Ensure optional migration columns
+        try {
+          await pool.query(`ALTER TABLE "society_${societyId}".poll_votes ADD COLUMN IF NOT EXISTS flat_number TEXT`);
+          await pool.query(`ALTER TABLE "society_${societyId}".polls ADD COLUMN IF NOT EXISTS is_secret BOOLEAN DEFAULT false`);
+          await pool.query(`ALTER TABLE "society_${societyId}".polls ADD COLUMN IF NOT EXISTS one_flat_one_vote BOOLEAN DEFAULT true`);
+        } catch (_) {}
 
-        const poll = await pool.query(`SELECT * FROM \"society_${societyId}\".polls WHERE id = $1`, [id]);
-        if (!poll.rows[0]) return res.status(404).json({ error: 'Poll not found' });
-        if (poll.rows[0].status !== 'ACTIVE') return res.status(400).json({ error: 'Poll is not active' });
+        const pollRes = await pool.query(`SELECT * FROM "society_${societyId}".polls WHERE id = $1`, [id]);
+        if (!pollRes.rows[0]) return res.status(404).json({ error: 'Poll not found' });
+        const pollObj = pollRes.rows[0];
+        if (pollObj.status !== 'ACTIVE') return res.status(400).json({ error: 'Poll is not active' });
 
-        let options = typeof poll.rows[0].options === 'string' ? JSON.parse(poll.rows[0].options) : poll.rows[0].options;
+        // 1-Flat-1-Vote enforcement: check if flat has already voted
+        if (userFlat && pollObj.one_flat_one_vote !== false) {
+          const flatVoted = await pool.query(
+            `SELECT * FROM "society_${societyId}".poll_votes WHERE poll_id = $1 AND flat_number = $2`,
+            [id, `${userWing}-${userFlat}`]
+          );
+          if (flatVoted.rows.length > 0) {
+            return res.status(400).json({ error: `Flat ${userWing}-${userFlat} has already voted for this resolution (1-Flat-1-Vote Rule)` });
+          }
+        }
+
+        const existing = await pool.query(`SELECT * FROM "society_${societyId}".poll_votes WHERE poll_id = $1 AND user_id = $2`, [id, userId]);
+        if (existing.rows.length > 0) return res.status(400).json({ error: 'You have already voted' });
+
+        let options = typeof pollObj.options === 'string' ? JSON.parse(pollObj.options) : pollObj.options;
         options = options.map(o => {
           if (o.id === option_id) return { ...o, votes: (o.votes || 0) + 1 };
           return o;
         });
 
-        await pool.query(`UPDATE \"society_${societyId}\".polls SET options = $1, total_votes = total_votes + 1 WHERE id = $2`, [JSON.stringify(options), id]);
-        await pool.query(`INSERT INTO \"society_${societyId}\".poll_votes (id, poll_id, user_id, option_id, voted_at) VALUES ($1, $2, $3, $4, $5)`, [uuidv4(), id, userId, option_id, now]);
+        await pool.query(`UPDATE "society_${societyId}".polls SET options = $1, total_votes = total_votes + 1 WHERE id = $2`, [JSON.stringify(options), id]);
+        await pool.query(
+          `INSERT INTO "society_${societyId}".poll_votes (id, poll_id, user_id, flat_number, option_id, voted_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [uuidv4(), id, userId, userFlat ? `${userWing}-${userFlat}` : null, option_id, now]
+        );
 
-        const updated = await pool.query(`SELECT * FROM \"society_${societyId}\".polls WHERE id = $1`, [id]);
-        return res.json({ poll: updated.rows[0] });
+        const updated = await pool.query(`SELECT * FROM "society_${societyId}".polls WHERE id = $1`, [id]);
+        return res.json({ success: true, poll: updated.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to vote' }));
     }
 
@@ -257,8 +281,13 @@ exports.vote = (req, res) => {
     if (poll.status !== 'ACTIVE') return res.status(400).json({ error: 'Poll is not active' });
 
     const pollVotes = db.get('poll_votes').value() || [];
+    if (userFlat && poll.one_flat_one_vote !== false) {
+      const flatVoted = pollVotes.some(v => v.poll_id === id && v.flat_number === `${userWing}-${userFlat}`);
+      if (flatVoted) return res.status(400).json({ error: `Flat ${userWing}-${userFlat} has already voted (1-Flat-1-Vote Rule)` });
+    }
+
     const alreadyVoted = pollVotes.some(v => v.poll_id === id && v.user_id === userId);
-    if (alreadyVoted) return res.status(400).json({ error: 'Already voted' });
+    if (alreadyVoted) return res.status(400).json({ error: 'You have already voted' });
 
     poll.options = poll.options.map(o => {
       if (o.id === option_id) return { ...o, votes: (o.votes || 0) + 1 };
@@ -269,9 +298,9 @@ exports.vote = (req, res) => {
     db.get('polls').find({ id }).assign({ options: poll.options, total_votes: poll.total_votes }).write();
 
     if (!db.get('poll_votes').value()) db.set('poll_votes', []).write();
-    db.get('poll_votes').push({ id: uuidv4(), poll_id: id, user_id: userId, option_id, voted_at: now }).write();
+    db.get('poll_votes').push({ id: uuidv4(), poll_id: id, user_id: userId, flat_number: userFlat ? `${userWing}-${userFlat}` : null, option_id, voted_at: now }).write();
 
-    res.json({ poll });
+    res.json({ success: true, poll });
   } catch (error) {
     res.status(500).json({ error: 'Failed to vote' });
   }
