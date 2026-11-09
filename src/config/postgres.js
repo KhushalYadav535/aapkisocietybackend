@@ -208,6 +208,18 @@ const _doEnsurePlatformSchema = async () => {
     await pool.query(`ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS blood_group TEXT`);
   } catch (_) {}
   await ensurePlatformSocietiesSchema();
+
+  // Auto-heal orphaned users who have no society_id assigned
+  try {
+    await pool.query(`
+      UPDATE platform.users
+      SET society_id = (SELECT id FROM platform.societies WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1)
+      WHERE (society_id IS NULL OR society_id = '') AND role != 'PLATFORM_ADMIN'
+        AND EXISTS (SELECT 1 FROM platform.societies WHERE status = 'ACTIVE');
+    `);
+  } catch (err) {
+    console.error('Failed to heal orphaned users in platform.users:', err.message);
+  }
 };
 
 const createTenantSchema = async (tenantId) => {

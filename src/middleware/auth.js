@@ -29,6 +29,31 @@ const authenticate = async (req, res, next) => {
     }
 
     user.role = normalizeRole(user.role);
+
+    // Auto-resolve missing society_id for non-platform users
+    if (user && !user.society_id && user.role !== 'PLATFORM_ADMIN') {
+      try {
+        if (isPostgresEnabled && pool) {
+          const defaultSoc = await pool.query(
+            "SELECT id FROM platform.societies WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1"
+          );
+          if (defaultSoc.rows.length > 0) {
+            user.society_id = defaultSoc.rows[0].id;
+            await pool.query('UPDATE platform.users SET society_id = $1, updated_at = NOW() WHERE id = $2', [user.society_id, user.id]);
+          }
+        } else {
+          const db = getDb();
+          const defaultSoc = db.get('societies').find({ status: 'ACTIVE' }).value();
+          if (defaultSoc) {
+            user.society_id = defaultSoc.id;
+            db.get('users').find({ id: user.id }).assign({ society_id: defaultSoc.id }).write();
+          }
+        }
+      } catch (e) {
+        console.error('Failed to auto-resolve society_id in authenticate:', e);
+      }
+    }
+
     const mfaExempt = ['/api/auth/mfa/setup', '/api/auth/mfa/verify', '/api/auth/me', '/api/auth/login', '/mfa/setup', '/mfa/verify', '/me', '/login', '/api/rbac/me/permissions', '/me/permissions'];
     if (MFA_REQUIRED_ROLES.includes(user.role) && !user.mfa_enabled && !mfaExempt.includes(req.path)) {
       return res.status(403).json({

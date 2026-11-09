@@ -17,6 +17,9 @@ exports.getAll = (req, res) => {
         const cols = 'id,email,first_name,last_name,phone,role,society_id,flat_number,wing,is_active,created_at';
         let query, countQuery, params, countParams;
         if (req.user.role !== 'PLATFORM_ADMIN') {
+          if (!req.user.society_id) {
+            return res.json({ members: [], pagination: { page, limit, total: 0, pages: 0 } });
+          }
           query = `SELECT ${cols} FROM platform.users WHERE society_id = $1 ORDER BY flat_number ASC LIMIT $2 OFFSET $3`;
           countQuery = 'SELECT COUNT(*)::int AS total FROM platform.users WHERE society_id = $1';
           params = [req.user.society_id, limit, offset];
@@ -33,12 +36,17 @@ exports.getAll = (req, res) => {
         ]);
         const total = cR.rows[0]?.total || 0;
         return res.json({ members: r.rows.map(safeUser), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
-      })().catch(() => res.status(500).json({ error: 'Failed to fetch members' }));
+      })().catch((err) => {
+        console.error('Failed to fetch members:', err);
+        return res.status(500).json({ error: 'Failed to fetch members' });
+      });
     }
     const db = getDb();
     let members;
     if (req.user.role === 'PLATFORM_ADMIN') {
       members = db.get('users').sortBy('created_at').reverse().value().map(safeUser);
+    } else if (!req.user.society_id) {
+      members = [];
     } else {
       members = db.get('users').filter({ society_id: req.user.society_id }).sortBy('flat_number').value().map(safeUser);
     }

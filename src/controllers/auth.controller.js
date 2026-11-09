@@ -36,10 +36,32 @@ exports.register = async (req, res) => {
     const id = uuidv4();
     const now = new Date().toISOString();
 
+    let effectiveSocietyId = society_id || null;
+    if (!effectiveSocietyId && requestedRole !== 'PLATFORM_ADMIN') {
+      try {
+        if (isPostgresEnabled && pool) {
+          const defaultSoc = await pool.query(
+            "SELECT id FROM platform.societies WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1"
+          );
+          if (defaultSoc.rows.length > 0) {
+            effectiveSocietyId = defaultSoc.rows[0].id;
+          }
+        } else {
+          const db = getDb();
+          const defaultSoc = db.get('societies').find({ status: 'ACTIVE' }).value();
+          if (defaultSoc) {
+            effectiveSocietyId = defaultSoc.id;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to auto-resolve society_id in register:', e);
+      }
+    }
+
     const newUser = {
       id, email, password: hashedPassword, first_name, last_name,
       phone: phone || null, role: requestedRole,
-      society_id: society_id || null, flat_number: flat_number || null,
+      society_id: effectiveSocietyId, flat_number: flat_number || null,
       wing: wing || null, is_active: 1, is_verified: 1, mfa_enabled: 0,
       avatar_url: null, created_at: now, updated_at: now
     };
@@ -103,6 +125,30 @@ exports.login = async (req, res) => {
     }
 
     user.role = normalizeRole(user.role);
+
+    if (!user.society_id && user.role !== 'PLATFORM_ADMIN') {
+      try {
+        if (isPostgresEnabled && pool) {
+          const defaultSoc = await pool.query(
+            "SELECT id FROM platform.societies WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1"
+          );
+          if (defaultSoc.rows.length > 0) {
+            user.society_id = defaultSoc.rows[0].id;
+            await pool.query('UPDATE platform.users SET society_id = $1, updated_at = NOW() WHERE id = $2', [user.society_id, user.id]);
+          }
+        } else {
+          const db = getDb();
+          const defaultSoc = db.get('societies').find({ status: 'ACTIVE' }).value();
+          if (defaultSoc) {
+            user.society_id = defaultSoc.id;
+            db.get('users').find({ id: user.id }).assign({ society_id: defaultSoc.id }).write();
+          }
+        }
+      } catch (e) {
+        console.error('Failed to auto-resolve society_id in login:', e);
+      }
+    }
+
     const token = generateToken(user);
 
     req.user = { id: user.id, society_id: user.society_id || 'platform' };
