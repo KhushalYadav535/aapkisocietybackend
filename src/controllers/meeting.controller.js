@@ -40,9 +40,11 @@ const ensureMeetingTables = async (societyId) => {
         min_votes_required INTEGER DEFAULT 1,
         status TEXT DEFAULT 'ACTIVE',
         created_by TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await pool.query(`ALTER TABLE \"society_${societyId}\".polls ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS \"society_${societyId}\".poll_votes (
         id TEXT PRIMARY KEY,
@@ -348,7 +350,10 @@ exports.closePoll = (req, res) => {
         await pool.query(`UPDATE \"society_${societyId}\".polls SET status = 'CLOSED', updated_at = $1 WHERE id = $2`, [now, id]);
         const r = await pool.query(`SELECT * FROM \"society_${societyId}\".polls WHERE id = $1`, [id]);
         return res.json({ poll: r.rows[0] });
-      }).catch(() => res.status(500).json({ error: 'Failed to close poll' }));
+      }).catch((err) => {
+        console.error('Failed to close poll:', err);
+        return res.status(500).json({ error: err.message || 'Failed to close poll' });
+      });
     }
 
     const db = getDb();

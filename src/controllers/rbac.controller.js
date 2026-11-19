@@ -160,9 +160,31 @@ const getAssignments = async (req, res) => {
   }
 };
 
+const endAssignment = async (req, res) => {
+  const { societyId, assignmentId } = req.params;
+  try {
+    const schema = getTenantSchemaName(societyId);
+    const r = await pool.query(
+      `UPDATE "${schema}".society_position_assignments
+       SET status = 'ENDED', end_date = CURRENT_DATE
+       WHERE id = $1 RETURNING *`,
+      [assignmentId]
+    );
+    if (r.rowCount === 0) {
+      return res.status(404).json({ error: 'Assignment not found' });
+    }
+    await logAudit(req, 'END_POSITION_ASSIGNMENT', 'POSITION_ASSIGNMENT', assignmentId, null, { status: 'ENDED' });
+    return res.json({ message: 'Position term ended successfully', assignment: r.rows[0] });
+  } catch (err) {
+    console.error('End assignment error:', err);
+    res.status(500).json({ error: 'Failed to end position assignment' });
+  }
+};
+
 module.exports = {
   getActivePermissions,
   assignPosition,
+  endAssignment,
   getPositions,
   getAssignments
 };

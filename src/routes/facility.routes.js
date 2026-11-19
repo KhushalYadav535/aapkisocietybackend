@@ -9,11 +9,13 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/', facilityController.getAll);
+router.get('/all-bookings', facilityController.getAllBookings);
 router.get('/:id', facilityController.getById);
 router.post('/', requirePermission('FACILITY_MANAGE'), [
   body('name').trim().notEmpty().withMessage('Facility name required'),
 ], validate, facilityController.create);
 router.put('/:id', requirePermission('FACILITY_MANAGE'), facilityController.update);
+router.delete('/:id', requirePermission('FACILITY_MANAGE'), facilityController.deleteFacility);
 
 router.get('/:id/bookings', facilityController.getBookings);
 router.post('/:id/book', [

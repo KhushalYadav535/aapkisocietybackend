@@ -353,6 +353,26 @@ exports.addFlat = (req, res) => {
   }
 };
 
+exports.deleteFlat = (req, res) => {
+  try {
+    const { id: societyId, flatId } = req.params;
+    if (isPostgresEnabled) {
+      return pool.query('DELETE FROM platform.flats WHERE id = $1 AND society_id = $2', [flatId, societyId]).then(r => {
+        if (r.rowCount === 0) return res.status(404).json({ error: 'Flat not found' });
+        return res.json({ message: 'Flat deleted successfully' });
+      }).catch(err => {
+        console.error(err);
+        return res.status(500).json({ error: 'Failed to delete flat' });
+      });
+    }
+    const db = getDb();
+    db.get('flats').remove({ id: flatId, society_id: societyId }).write();
+    res.json({ message: 'Flat deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete flat' });
+  }
+};
+
 exports.suspend = (req, res) => {
   try {
     if (isPostgresEnabled) {

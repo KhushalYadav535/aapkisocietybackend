@@ -134,19 +134,28 @@ exports.getActiveScrollers = async (req, res) => {
 
     if (req.user.society_id) {
       await withTenant(req.user.society_id, async (client) => {
-        const societyScrollers = await client.query(
-          `
-          SELECT id, 'SOCIETY' as level, message, urgency_level, start_at, end_at, target_audience, target_wing, is_active
-          FROM scrollers
-          WHERE COALESCE(is_active, 1) = 1
-            AND (start_at IS NULL OR start_at <= NOW())
-            AND (end_at IS NULL OR end_at >= NOW())
-            AND (target_audience = 'ALL' OR target_audience = $1)
-            AND (target_wing IS NULL OR target_wing = $2)
-          ORDER BY urgency_level = 'URGENT' DESC, urgency_level = 'IMPORTANT' DESC, created_at DESC
-        `,
-          [audienceRole, req.user.wing || null]
-        );
+        let societyScrollers;
+        if (includeAll && (['ADMIN', 'COMMITTEE', 'PLATFORM_ADMIN', 'TREASURER'].includes(viewerRole) || isPlatformRole(req.user.role))) {
+          societyScrollers = await client.query(`
+            SELECT id, 'SOCIETY' as level, message, urgency_level, start_at, end_at, target_audience, target_wing, is_active, created_at
+            FROM scrollers
+            ORDER BY created_at DESC
+          `);
+        } else {
+          societyScrollers = await client.query(
+            `
+            SELECT id, 'SOCIETY' as level, message, urgency_level, start_at, end_at, target_audience, target_wing, is_active
+            FROM scrollers
+            WHERE COALESCE(is_active, 1) = 1
+              AND (start_at IS NULL OR start_at <= NOW())
+              AND (end_at IS NULL OR end_at >= NOW())
+              AND (target_audience = 'ALL' OR target_audience = $1)
+              AND (target_wing IS NULL OR target_wing = $2)
+            ORDER BY urgency_level = 'URGENT' DESC, urgency_level = 'IMPORTANT' DESC, created_at DESC
+          `,
+            [audienceRole, req.user.wing || null]
+          );
+        }
 
         for (const s of societyScrollers.rows) {
           scrollers.push(s);

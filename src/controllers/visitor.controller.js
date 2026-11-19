@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled } = require('../config/postgres');
+const { logAudit } = require('./audit.controller');
 
 const ensureVisitorTable = async (client) => {
   await client.query(`
@@ -97,6 +98,7 @@ exports.create = (req, res) => {
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [visitor.id, visitor.society_id, visitor.visitor_name, visitor.visitor_phone, visitor.purpose, visitor.flat_id, visitor.visiting_member_id, visitor.vehicle_number, visitor.check_in, visitor.check_out, visitor.status, visitor.approved_by, visitor.guard_notes, visitor.created_at]
         );
+        logAudit(req, 'VISITOR_CHECKED_IN', 'VISITOR', visitor.id, null, { visitor_name: visitor.visitor_name });
         return res.status(201).json({ visitor });
       }).catch(() => res.status(500).json({ error: 'Failed to log visitor' }));
     }
@@ -112,6 +114,7 @@ exports.create = (req, res) => {
       guard_notes: null, created_at: now
     };
     db.get('visitors').push(visitor).write();
+    logAudit(req, 'VISITOR_CHECKED_IN', 'VISITOR', visitor.id, null, { visitor_name: visitor.visitor_name });
     res.status(201).json({ visitor });
   } catch (error) {
     res.status(500).json({ error: 'Failed to log visitor' });
@@ -133,6 +136,7 @@ exports.checkout = (req, res) => {
         if (result.rowCount === 0) return res.status(403).json({ error: 'Not authorized or visitor not found' });
         
         const r = await client.query('SELECT * FROM visitors WHERE id = $1 LIMIT 1', [req.params.id]);
+        logAudit(req, 'VISITOR_CHECKED_OUT', 'VISITOR', req.params.id);
         return res.json({ visitor: r.rows[0] });
       }).catch(() => res.status(500).json({ error: 'Failed to checkout visitor' }));
     }
@@ -146,6 +150,7 @@ exports.checkout = (req, res) => {
     const now = new Date().toISOString();
     db.get('visitors').find({ id: req.params.id }).assign({ check_out: now, status: 'CHECKED_OUT' }).write();
     const updatedVisitor = db.get('visitors').find({ id: req.params.id }).value();
+    logAudit(req, 'VISITOR_CHECKED_OUT', 'VISITOR', req.params.id);
     res.json({ visitor: updatedVisitor });
   } catch (error) {
     res.status(500).json({ error: 'Failed to checkout visitor' });

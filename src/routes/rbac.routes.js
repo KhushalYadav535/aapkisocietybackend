@@ -10,5 +10,7 @@ router.get('/me/permissions', authenticate, rbacController.getActivePermissions)
 router.get('/societies/:societyId/positions', authenticate, requirePermission('SOCIETY_MANAGE'), rbacController.getPositions);
 router.get('/societies/:societyId/assignments', authenticate, requirePermission('SOCIETY_MANAGE'), rbacController.getAssignments);
 router.post('/societies/:societyId/positions/assign', authenticate, requirePermission('SOCIETY_MANAGE'), rbacController.assignPosition);
+router.put('/societies/:societyId/assignments/:assignmentId/end', authenticate, requirePermission('SOCIETY_MANAGE'), rbacController.endAssignment);
+router.delete('/societies/:societyId/assignments/:assignmentId', authenticate, requirePermission('SOCIETY_MANAGE'), rbacController.endAssignment);
 
 module.exports = router;

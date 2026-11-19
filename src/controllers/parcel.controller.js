@@ -257,9 +257,16 @@ exports.getStats = async (req, res) => {
     if (isPostgresEnabled) {
       return withTenant(societyId, async (client) => {
         await ensureParcelTable(client);
-        const atGateRes = await client.query(`SELECT COUNT(*)::int as count FROM parcels WHERE society_id = $1 AND status = 'AT_GATE'`, [societyId]);
-        const collectedTodayRes = await client.query(`SELECT COUNT(*)::int as count FROM parcels WHERE society_id = $1 AND status = 'COLLECTED' AND collected_at::date = CURRENT_DATE`, [societyId]);
-        const overdueRes = await client.query(`SELECT COUNT(*)::int as count FROM parcels WHERE society_id = $1 AND status = 'AT_GATE' AND created_at < NOW() - INTERVAL '48 hours'`, [societyId]);
+        let residentFilter = '';
+        const params = [societyId];
+        if (req.user.role === 'RESIDENT' && req.user.flat_number) {
+          residentFilter = ' AND flat_number = $2';
+          params.push(req.user.flat_number);
+        }
+
+        const atGateRes = await client.query(`SELECT COUNT(*)::int as count FROM parcels WHERE society_id = $1 AND status = 'AT_GATE'${residentFilter}`, params);
+        const collectedTodayRes = await client.query(`SELECT COUNT(*)::int as count FROM parcels WHERE society_id = $1 AND status = 'COLLECTED' AND collected_at::date = CURRENT_DATE${residentFilter}`, params);
+        const overdueRes = await client.query(`SELECT COUNT(*)::int as count FROM parcels WHERE society_id = $1 AND status = 'AT_GATE' AND created_at < NOW() - INTERVAL '48 hours'${residentFilter}`, params);
 
         return res.json({
           stats: {
@@ -272,7 +279,10 @@ exports.getStats = async (req, res) => {
     }
 
     const db = getDb();
-    const list = (db.get('parcels').value() || []).filter(p => p.society_id === societyId);
+    let list = (db.get('parcels').value() || []).filter(p => p.society_id === societyId);
+    if (req.user.role === 'RESIDENT' && req.user.flat_number) {
+      list = list.filter(p => p.flat_number === req.user.flat_number);
+    }
     const today = new Date().toISOString().split('T')[0];
     const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
 

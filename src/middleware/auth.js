@@ -110,6 +110,10 @@ const requirePermission = (permissionCode) => {
     if (role === 'ADMIN' || role === 'PLATFORM_ADMIN') {
       return next();
     }
+    if ((role === 'CHECKER' || role === 'TREASURY_CHECKER' || role === 'TREASURER') && 
+        ['AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE'].includes(permissionCode)) {
+      return next();
+    }
     if (role === 'GUARD' && ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'].includes(permissionCode)) {
       return next();
     }

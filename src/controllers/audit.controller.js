@@ -146,9 +146,9 @@ module.exports.getAuditStats = async (req, res) => {
           SELECT
             COUNT(*) AS total,
             COUNT(CASE WHEN created_at >= NOW() - INTERVAL '24 hours' THEN 1 END) AS last_24h,
-            COUNT(CASE WHEN action LIKE 'VOUCHER%' THEN 1 END) AS financial_events,
+            COUNT(CASE WHEN action LIKE 'VOUCHER%' OR action LIKE 'BILL%' OR action LIKE 'PAYMENT%' THEN 1 END) AS financial_events,
             COUNT(CASE WHEN action IN ('LOGIN_SUCCESS','LOGIN_FAILURE','LOGOUT') THEN 1 END) AS auth_events,
-            COUNT(CASE WHEN action = 'PERMISSION_DENIED' THEN 1 END) AS security_events
+            COUNT(CASE WHEN action = 'PERMISSION_DENIED' OR action LIKE '%MFA%' OR action LIKE '%SECURITY%' THEN 1 END) AS security_events
           FROM audit_logs WHERE tenant_id = $1
         `, [req.user.society_id]);
         return res.json({ stats: rows[0] });

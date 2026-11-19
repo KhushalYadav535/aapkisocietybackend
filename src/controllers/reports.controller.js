@@ -37,11 +37,11 @@ exports.getCollectionReport = async (req, res) => {
         SELECT
           COUNT(DISTINCT p.id) as total_payments,
           COALESCE(SUM(p.amount), 0) as total_collected,
-          COALESCE(SUM(b.total_amount), 0) as total_billed,
-          COALESCE(SUM(b.total_amount) - COALESCE(SUM(p.amount), 0), 0) as outstanding
+          COALESCE(SUM(CASE WHEN b.status != 'REJECTED' THEN b.total_amount ELSE 0 END), 0) as total_billed,
+          COALESCE(SUM(CASE WHEN b.status != 'REJECTED' THEN b.total_amount ELSE 0 END) - COALESCE(SUM(p.amount), 0), 0) as outstanding
         FROM ${schema}.bills b
         LEFT JOIN ${schema}.payments p ON p.bill_id = b.id AND p.status = 'SUCCESS'
-        WHERE 1=1
+        WHERE b.status != 'REJECTED'
         ${start_date ? 'AND b.bill_date >= $1' : ''}
         ${end_date ? 'AND b.bill_date <= $2' : ''}
       `;
@@ -72,7 +72,7 @@ exports.getCollectionReport = async (req, res) => {
       const bills = db.get('bills').value();
 
       const totalCollected = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-      const totalBilled = bills.reduce((sum, b) => sum + (b.total_amount || 0), 0);
+      const totalBilled = bills.filter(b => b.status !== 'REJECTED').reduce((sum, b) => sum + (b.total_amount || 0), 0);
 
       report.summary = {
         total_payments: payments.length,

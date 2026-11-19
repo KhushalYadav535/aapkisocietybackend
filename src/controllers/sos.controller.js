@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled } = require('../config/postgres');
+const { logAudit } = require('./audit.controller');
 
 const ensureSosTables = async (societyId) => {
   await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
@@ -50,12 +51,14 @@ exports.raise = async (req, res) => {
          alert.alert_type, alert.description, alert.status,
          alert.responded_by, alert.responded_at, alert.resolved_at, alert.created_at]
       );
+      logAudit(req, 'SOS_RAISED', 'SOS', alert.id, null, { alert_type: alert.alert_type });
       return res.status(201).json({ alert });
     }
 
     const db = getDb();
     if (!db.get('sos_alerts').value()) db.set('sos_alerts', []).write();
     db.get('sos_alerts').push(alert).write();
+    logAudit(req, 'SOS_RAISED', 'SOS', alert.id, null, { alert_type: alert.alert_type });
     res.status(201).json({ alert });
   } catch (error) {
     console.error('SOS raise error:', error.message);
@@ -138,11 +141,13 @@ exports.resolve = async (req, res) => {
         [now, id]
       );
       const r = await pool.query(`SELECT * FROM \"society_${societyId}\".sos_alerts WHERE id=$1`, [id]);
+      logAudit(req, 'SOS_RESOLVED', 'SOS', id);
       return res.json({ alert: r.rows[0] });
     }
 
     const db = getDb();
     db.get('sos_alerts').find({ id }).assign({ status: 'RESOLVED', resolved_at: now }).write();
+    logAudit(req, 'SOS_RESOLVED', 'SOS', id);
     res.json({ alert: db.get('sos_alerts').find({ id }).value() });
   } catch (error) {
     res.status(500).json({ error: 'Failed to resolve SOS' });

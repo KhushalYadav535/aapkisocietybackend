@@ -229,3 +229,78 @@ exports.cancelBooking = (req, res) => {
     res.status(500).json({ error: 'Failed to cancel booking' });
   }
 };
+
+exports.getAllBookings = (req, res) => {
+  try {
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureFacilityTables(client);
+        let q = `
+          SELECT fb.*, f.name AS facility_name, f.type AS facility_type,
+                 pu.first_name || ' ' || pu.last_name AS booked_by_name,
+                 pu.flat_number, pu.wing
+          FROM facility_bookings fb
+          LEFT JOIN facilities f ON f.id = fb.facility_id
+          LEFT JOIN platform.users pu ON pu.id = fb.booked_by
+        `;
+        const params = [];
+        if (req.user.role === 'RESIDENT') {
+          q += ' WHERE fb.booked_by = $1';
+          params.push(req.user.id);
+        }
+        q += ' ORDER BY fb.booking_date DESC, fb.created_at DESC';
+        const r = await client.query(q, params);
+        return res.json({ bookings: r.rows });
+      }).catch((e) => {
+        console.error(e);
+        return res.status(500).json({ error: 'Failed to fetch all bookings' });
+      });
+    }
+    const db = getDb();
+    let bookings = db.get('facility_bookings').value() || [];
+    if (req.user.role === 'RESIDENT') {
+      bookings = bookings.filter(b => b.booked_by === req.user.id);
+    }
+    const facilities = db.get('facilities').value() || [];
+    const users = db.get('users').value() || [];
+    const enriched = bookings.map(b => {
+      const f = facilities.find(fac => fac.id === b.facility_id);
+      const u = users.find(usr => usr.id === b.booked_by);
+      return {
+        ...b,
+        facility_name: f?.name || 'Facility',
+        facility_type: f?.type,
+        booked_by_name: u ? `${u.first_name} ${u.last_name}` : 'Resident',
+        flat_number: u?.flat_number,
+        wing: u?.wing
+      };
+    });
+    res.json({ bookings: enriched });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch all bookings' });
+  }
+};
+
+exports.deleteFacility = (req, res) => {
+  try {
+    const { id } = req.params;
+    if (isPostgresEnabled && req.user.society_id) {
+      return withTenant(req.user.society_id, async (client) => {
+        await ensureFacilityTables(client);
+        await client.query('DELETE FROM facility_bookings WHERE facility_id = $1', [id]);
+        const r = await client.query('DELETE FROM facilities WHERE id = $1', [id]);
+        if (r.rowCount === 0) return res.status(404).json({ error: 'Facility not found' });
+        return res.json({ message: 'Facility deleted successfully' });
+      }).catch((e) => {
+        console.error(e);
+        return res.status(500).json({ error: 'Failed to delete facility' });
+      });
+    }
+    const db = getDb();
+    db.get('facility_bookings').remove({ facility_id: id }).write();
+    db.get('facilities').remove({ id }).write();
+    res.json({ message: 'Facility deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete facility' });
+  }
+};

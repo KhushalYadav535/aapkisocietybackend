@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { getDb } = require('../config/database');
 const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
 const { normalizeRole, canAssignRole } = require('../constants/roles');
+const { logAudit } = require('./audit.controller');
 
 const safeUser = (u) => ({ id: u.id, email: u.email, first_name: u.first_name, last_name: u.last_name, phone: u.phone, role: u.role, society_id: u.society_id, flat_number: u.flat_number, wing: u.wing, is_active: u.is_active, created_at: u.created_at });
 
@@ -122,6 +123,7 @@ exports.create = async (req, res) => {
       const db = getDb();
       db.get('users').push(newUser).write();
     }
+    await logAudit(req, 'MEMBER_CREATED', 'USER', newUser.id, null, { email: newUser.email, role: newUser.role, flat_number: newUser.flat_number });
     res.status(201).json({
       member: safeUser(newUser),
       message: plaintext.length >= 6
@@ -179,6 +181,7 @@ exports.update = (req, res) => {
     updates.updated_at = new Date().toISOString();
     db.get('users').find({ id: req.params.id }).assign(updates).write();
     const member = db.get('users').find({ id: req.params.id }).value();
+    logAudit(req, 'MEMBER_UPDATED', 'USER', req.params.id, null, updates);
     res.json({ member: safeUser(member) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update member' });
@@ -197,6 +200,7 @@ exports.deactivate = (req, res) => {
         }
         const result = await pool.query(query, params);
         if (result.rowCount === 0) return res.status(404).json({ error: 'Member not found or unauthorized' });
+        await logAudit(req, 'MEMBER_DEACTIVATED', 'USER', req.params.id, null, { is_active: 0 });
         return res.json({ message: 'Member deactivated successfully' });
       })().catch(() => res.status(500).json({ error: 'Failed to deactivate member' }));
     }
@@ -207,6 +211,7 @@ exports.deactivate = (req, res) => {
       return res.status(403).json({ error: 'Cross-tenant access denied' });
     }
     db.get('users').find({ id: req.params.id }).assign({ is_active: 0, updated_at: new Date().toISOString() }).write();
+    logAudit(req, 'MEMBER_DEACTIVATED', 'USER', req.params.id, null, { is_active: 0 });
     res.json({ message: 'Member deactivated successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to deactivate member' });

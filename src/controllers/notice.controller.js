@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled } = require('../config/postgres');
+const { logAudit } = require('./audit.controller');
 
 const ensureNoticeTable = async (client) => {
   await client.query(`
@@ -94,6 +95,7 @@ exports.create = (req, res) => {
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
           [notice.id, notice.society_id, notice.title, notice.content, notice.category, notice.priority, notice.published_by, notice.is_published, notice.publish_date, notice.expiry_date, notice.attachment_url, notice.created_at, notice.updated_at]
         );
+        logAudit(req, 'NOTICE_CREATED', 'NOTICE', notice.id, null, { title: notice.title });
         return res.status(201).json({ notice });
       }).catch(() => res.status(500).json({ error: 'Failed to create notice' }));
     }
@@ -108,6 +110,7 @@ exports.create = (req, res) => {
       created_at: now, updated_at: now
     };
     db.get('notices').push(notice).write();
+    logAudit(req, 'NOTICE_CREATED', 'NOTICE', notice.id, null, { title: notice.title });
     res.status(201).json({ notice });
   } catch (error) {
     res.status(500).json({ error: 'Failed to create notice' });
@@ -154,6 +157,7 @@ exports.publish = (req, res) => {
         await ensureNoticeTable(client);
         await client.query('UPDATE notices SET is_published = 1, publish_date = NOW(), updated_at = NOW() WHERE id = $1', [req.params.id]);
         const r = await client.query('SELECT * FROM notices WHERE id = $1 LIMIT 1', [req.params.id]);
+        logAudit(req, 'NOTICE_PUBLISHED', 'NOTICE', req.params.id);
         return res.json({ notice: r.rows[0], message: 'Notice published' });
       }).catch(() => res.status(500).json({ error: 'Failed to publish notice' }));
     }
@@ -161,6 +165,7 @@ exports.publish = (req, res) => {
     const now = new Date().toISOString();
     db.get('notices').find({ id: req.params.id }).assign({ is_published: 1, publish_date: now, updated_at: now }).write();
     const notice = db.get('notices').find({ id: req.params.id }).value();
+    logAudit(req, 'NOTICE_PUBLISHED', 'NOTICE', req.params.id);
     res.json({ notice, message: 'Notice published' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to publish notice' });
@@ -173,11 +178,13 @@ exports.remove = (req, res) => {
       return withTenant(req.user.society_id, async (client) => {
         await ensureNoticeTable(client);
         await client.query('DELETE FROM notices WHERE id = $1', [req.params.id]);
+        logAudit(req, 'NOTICE_DELETED', 'NOTICE', req.params.id);
         return res.json({ message: 'Notice deleted' });
       }).catch(() => res.status(500).json({ error: 'Failed to delete notice' }));
     }
     const db = getDb();
     db.get('notices').remove({ id: req.params.id }).write();
+    logAudit(req, 'NOTICE_DELETED', 'NOTICE', req.params.id);
     res.json({ message: 'Notice deleted' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete notice' });

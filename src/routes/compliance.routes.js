@@ -16,5 +16,6 @@ router.post('/calendar', requirePermission('COMPLIANCE_MANAGE'), [
 router.put('/calendar/:id', requirePermission('COMPLIANCE_MANAGE'), [
   body('status').isIn(['PENDING', 'COMPLETED', 'OVERDUE'])
 ], validate, controller.updateEvent);
+router.delete('/calendar/:id', requirePermission('COMPLIANCE_MANAGE'), controller.deleteEvent);
 
 module.exports = router;

@@ -16,6 +16,32 @@ const getTenantSchemaName = (tenantId) => `society_${String(tenantId).replace(/-
 // They only need to run once per process boot; afterwards the result is cached.
 let _societiesSchemaReady = false;
 let _societiesSchemaPromise = null;
+let _dbExistsChecked = false;
+
+const ensureDatabaseExists = async () => {
+  if (!connectionString || _dbExistsChecked) return;
+  _dbExistsChecked = true;
+  try {
+    const url = new URL(connectionString);
+    const dbName = url.pathname.replace(/^\//, '');
+    if (!dbName || dbName === 'postgres') return;
+
+    const adminUrl = new URL(connectionString);
+    adminUrl.pathname = '/postgres';
+    const { Client } = require('pg');
+    const adminClient = new Client({ connectionString: adminUrl.toString() });
+    await adminClient.connect();
+    const res = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName]);
+    if (res.rows.length === 0) {
+      console.log(`Creating PostgreSQL database "${dbName}"...`);
+      await adminClient.query(`CREATE DATABASE "${dbName}"`);
+      console.log(`✅ PostgreSQL database "${dbName}" created successfully!`);
+    }
+    await adminClient.end();
+  } catch (_) {
+    // If PostgreSQL isn't running or /postgres is inaccessible, proceed to let LowDB fallback handle it
+  }
+};
 
 const ensurePlatformSocietiesSchema = async () => {
   if (!pool) return;
@@ -29,6 +55,7 @@ const ensurePlatformSocietiesSchema = async () => {
 
 const _doEnsurePlatformSocietiesSchema = async () => {
   if (!pool) return;
+  await ensureDatabaseExists();
   await pool.query('CREATE SCHEMA IF NOT EXISTS platform');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS platform.societies (
@@ -137,6 +164,7 @@ const ensurePlatformSchema = async () => {
 
 const _doEnsurePlatformSchema = async () => {
   if (!pool) return;
+  await ensureDatabaseExists();
   await pool.query('CREATE SCHEMA IF NOT EXISTS platform');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS platform.users (
@@ -206,7 +234,7 @@ const _doEnsurePlatformSchema = async () => {
   try {
     await pool.query(`ALTER TABLE platform.scrollers ADD COLUMN IF NOT EXISTS scroll_speed TEXT DEFAULT 'MEDIUM'`);
     await pool.query(`ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS blood_group TEXT`);
-  } catch (_) {}
+  } catch (_) { }
   await ensurePlatformSocietiesSchema();
 
   // Auto-heal orphaned users who have no society_id assigned
@@ -358,7 +386,7 @@ const createTenantSchema = async (tenantId) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS roles (
         id TEXT PRIMARY KEY,
@@ -581,7 +609,7 @@ const createTenantSchema = async (tenantId) => {
       await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_cost NUMERIC`);
       await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS avg_rating NUMERIC DEFAULT 5.0`);
       await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS total_reviews INTEGER DEFAULT 0`);
-    } catch (_) {}
+    } catch (_) { }
 
     // Auto-seed default RBAC roles and permissions
     await seedDefaultTenantRBAC(client);
@@ -763,7 +791,7 @@ const ensureTenantFeatureTables = async (tenantId) => {
       await client.query(`ALTER TABLE assets ADD COLUMN IF NOT EXISTS amc_cost NUMERIC`);
       await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS avg_rating NUMERIC DEFAULT 5.0`);
       await client.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS total_reviews INTEGER DEFAULT 0`);
-    } catch (_) {}
+    } catch (_) { }
   } catch (err) {
     console.error('Error ensuring tenant feature tables:', err);
   } finally {
@@ -848,15 +876,15 @@ const seedDefaultTenantRBAC = async (client) => {
   const rolePermMap = {
     SOCIETY_ADMIN: Object.keys(permsMap),
     FINANCE_MANAGER: [
-      'BILL_APPROVE', 'BILLING_CREATE', 'BILLING_APPROVE', 'VOUCHER_CREATE', 
-      'VOUCHER_APPROVE', 'VOUCHER_VIEW', 'LEDGER_VIEW', 'TAX_VIEW', 'TAX_MANAGE', 
+      'BILL_APPROVE', 'BILLING_CREATE', 'BILLING_APPROVE', 'VOUCHER_CREATE',
+      'VOUCHER_APPROVE', 'VOUCHER_VIEW', 'LEDGER_VIEW', 'TAX_VIEW', 'TAX_MANAGE',
       'REPORT_VIEW', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW'
     ],
     TREASURY_MAKER: [
       'VOUCHER_CREATE', 'VOUCHER_VIEW', 'BILLING_CREATE', 'LEDGER_VIEW', 'TAX_VIEW', 'REPORT_VIEW'
     ],
     TREASURY_CHECKER: [
-      'VOUCHER_APPROVE', 'VOUCHER_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'LEDGER_VIEW', 'TAX_VIEW', 'TAX_MANAGE', 'REPORT_VIEW'
+      'VOUCHER_APPROVE', 'VOUCHER_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'LEDGER_VIEW', 'TAX_VIEW', 'TAX_MANAGE', 'REPORT_VIEW', 'AUDIT_VIEW'
     ],
     COMMITTEE_MEMBER: [
       'NOTICE_CREATE', 'COMPLAINT_ASSIGN', 'VOUCHER_VIEW', 'REPORT_VIEW', 'MEETING_MANAGE', 'FACILITY_MANAGE', 'DOCUMENT_MANAGE', 'SOS_RESPOND'
@@ -945,5 +973,6 @@ module.exports = {
   createTenantSchema,
   ensureTenantFeatureTables,
   seedDefaultTenantRBAC,
+  ensureDatabaseExists,
   withTenant
 };

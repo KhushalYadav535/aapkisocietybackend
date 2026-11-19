@@ -35,6 +35,7 @@ router.get('/:id/wings', societyController.getWings);
 router.post('/:id/wings', requirePermission('SOCIETY_MANAGE'), societyController.addWing);
 router.get('/:id/flats', societyController.getFlats);
 router.post('/:id/flats', requirePermission('SOCIETY_MANAGE'), societyController.addFlat);
+router.delete('/:id/flats/:flatId', requirePermission('SOCIETY_MANAGE'), societyController.deleteFlat);
 
 router.put('/:id/suspend', authorize('PLATFORM_ADMIN'), societyController.suspend);
 router.put('/:id/reactivate', authorize('PLATFORM_ADMIN'), societyController.reactivate);

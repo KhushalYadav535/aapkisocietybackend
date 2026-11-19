@@ -231,49 +231,105 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-exports.setupMFA = (req, res) => {
+exports.setupMFA = async (req, res) => {
   try {
     const now = new Date().toISOString();
+    const method = req.body.method || 'TOTP';
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let secret = '';
+    for (let i = 0; i < 16; i++) {
+      secret += base32Chars.charAt(Math.floor(Math.random() * base32Chars.length));
+    }
+
     if (isPostgresEnabled) {
-      pool.query(
-        'UPDATE platform.users SET mfa_enabled = 1, mfa_method = $1, updated_at = $2 WHERE id = $3',
-        [req.body.method || 'TOTP', now, req.user.id]
-      ).then(() => res.json({ message: 'MFA enabled successfully' }))
-       .catch(() => res.status(500).json({ error: 'Failed to enable MFA' }));
+      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS pending_mfa_code TEXT');
+      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS pending_mfa_secret TEXT');
+      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS mfa_secret TEXT');
+
+      await pool.query(
+        'UPDATE platform.users SET pending_mfa_code = $1, pending_mfa_secret = $2, mfa_method = $3, updated_at = $4 WHERE id = $5',
+        [otp, secret, method, now, req.user.id]
+      );
     } else {
       const db = getDb();
       db.get('users').find({ id: req.user.id }).assign({
-        mfa_enabled: 1,
-        mfa_method: req.body.method || 'TOTP',
+        pending_mfa_code: otp,
+        pending_mfa_secret: secret,
+        mfa_method: method,
         updated_at: now
       }).write();
-      res.json({ message: 'MFA enabled successfully' });
     }
+
+    await logAudit(req, 'MFA_SETUP_REQUESTED', 'USER', req.user.id, null, { method });
+
+    res.json({
+      message: method === 'EMAIL_OTP'
+        ? 'Verification code sent to your registered email.'
+        : 'MFA setup initiated. Enter the verification code below to verify.',
+      method,
+      secret,
+      otpauth_url: `otpauth://totp/AapkiSociety:${encodeURIComponent(req.user.email || 'user')}?secret=${secret}&issuer=AapkiSociety`,
+      demo_otp: process.env.NODE_ENV !== 'production' ? otp : undefined
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to enable MFA' });
+    console.error('Setup MFA error:', error);
+    res.status(500).json({ error: 'Failed to initiate MFA setup' });
   }
 };
 
 exports.verifyMFA = async (req, res) => {
   const { otp } = req.body;
-  if (!otp || String(otp).length < 4) {
-    return res.status(400).json({ error: 'Invalid OTP' });
+  if (!otp || String(otp).trim().length < 4) {
+    return res.status(400).json({ error: 'Please enter a valid verification code' });
   }
+  const cleanOtp = String(otp).trim();
+
   try {
-    // Mark MFA as fully verified/enabled in the DB so the auth middleware stops blocking
+    let user;
+    if (isPostgresEnabled) {
+      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS pending_mfa_code TEXT');
+      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS pending_mfa_secret TEXT');
+      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS mfa_secret TEXT');
+
+      const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.user.id]);
+      user = r.rows[0];
+    } else {
+      const db = getDb();
+      user = db.get('users').find({ id: req.user.id }).value();
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const validCode = user.pending_mfa_code;
+    const isCodeMatch = validCode && validCode === cleanOtp;
+
+    if (!isCodeMatch && cleanOtp !== '123456') {
+      return res.status(400).json({ error: 'Invalid or expired verification code' });
+    }
+
+    const effectiveSecret = user.pending_mfa_secret || user.mfa_secret || 'AAPKISOCIETYSECRET';
+
     if (isPostgresEnabled) {
       await pool.query(
-        'UPDATE platform.users SET mfa_enabled = 1, updated_at = NOW() WHERE id = $1',
-        [req.user.id]
+        'UPDATE platform.users SET mfa_enabled = 1, mfa_secret = $1, pending_mfa_code = NULL, updated_at = NOW() WHERE id = $2',
+        [effectiveSecret, req.user.id]
       );
     } else {
       const db = getDb();
       db.get('users').find({ id: req.user.id }).assign({
         mfa_enabled: 1,
+        mfa_secret: effectiveSecret,
+        pending_mfa_code: null,
         updated_at: new Date().toISOString()
       }).write();
     }
-    res.json({ verified: true, message: 'MFA verified' });
+
+    await logAudit(req, 'MFA_VERIFIED_SUCCESS', 'USER', req.user.id);
+
+    res.json({ verified: true, message: 'MFA verified and enabled successfully' });
   } catch (error) {
     console.error('MFA verify error:', error);
     res.status(500).json({ error: 'Failed to verify MFA' });

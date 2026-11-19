@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled } = require('../config/postgres');
+const { logAudit } = require('./audit.controller');
 const PDFDocument = require('pdfkit');
 const XLSX = require('xlsx');
 
@@ -200,6 +201,7 @@ exports.createBill = (req, res) => {
           });
           await Promise.all(itemPromises);
         }
+        logAudit(req, 'BILL_CREATED', 'BILL', bill.id, null, { bill_number: bill.bill_number, amount: bill.total_amount, status: bill.status });
         return res.status(201).json({ bill });
       }).catch((error) => {
         console.error('Create bill error:', error);
@@ -220,6 +222,7 @@ exports.createBill = (req, res) => {
       }
     }
 
+    logAudit(req, 'BILL_CREATED', 'BILL', bill.id, null, { bill_number: bill.bill_number, amount: bill.total_amount, status: bill.status });
     res.status(201).json({ bill });
   } catch (error) {
     console.error('Create bill error:', error);
@@ -234,22 +237,24 @@ exports.approveBill = (req, res) => {
         await ensureTenantBillingTables(client);
         const { rows } = await client.query('SELECT created_by, status FROM bills WHERE id = $1', [req.params.id]);
         if (!rows.length) return res.status(404).json({ error: 'Bill not found' });
-        if (rows[0].created_by === req.user.id && req.user.role !== 'PLATFORM_ADMIN') {
-          return res.status(403).json({ error: 'MAKER_CHECKER_VIOLATION: You cannot approve a bill that you created.' });
+        if (rows[0].created_by === req.user.id && !['PLATFORM_ADMIN', 'ADMIN'].includes(req.user.role)) {
+          return res.status(403).json({ error: 'Maker-Checker Policy: Bill creator cannot self-approve. Must be approved by a Checker or Society Administrator.' });
         }
         await client.query('UPDATE bills SET status = $1, approved_by = $2, updated_at = NOW() WHERE id = $3', ['APPROVED', req.user.id, req.params.id]);
         const r = await client.query('SELECT * FROM bills WHERE id = $1 LIMIT 1', [req.params.id]);
+        await logAudit(req, 'BILL_APPROVED', 'BILL', req.params.id, { status: rows[0].status }, { status: 'APPROVED' });
         return res.json({ bill: r.rows[0], message: 'Bill approved' });
       }).catch((e) => res.status(500).json({ error: e.message || 'Failed to approve bill' }));
     }
     const db = getDb();
     const bill = db.get('bills').find({ id: req.params.id }).value();
     if (!bill) return res.status(404).json({ error: 'Bill not found' });
-    if (bill.created_by === req.user.id && req.user.role !== 'PLATFORM_ADMIN') {
-      return res.status(403).json({ error: 'MAKER_CHECKER_VIOLATION: You cannot approve a bill that you created.' });
+    if (bill.created_by === req.user.id && !['PLATFORM_ADMIN', 'ADMIN'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Maker-Checker Policy: Bill creator cannot self-approve. Must be approved by a Checker or Society Administrator.' });
     }
     db.get('bills').find({ id: req.params.id }).assign({ status: 'APPROVED', approved_by: req.user.id, updated_at: new Date().toISOString() }).write();
     const updatedBill = db.get('bills').find({ id: req.params.id }).value();
+    logAudit(req, 'BILL_APPROVED', 'BILL', req.params.id, { status: bill.status }, { status: 'APPROVED' });
     res.json({ bill: updatedBill, message: 'Bill approved' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to approve bill' });
@@ -263,12 +268,14 @@ exports.rejectBill = (req, res) => {
         await ensureTenantBillingTables(client);
         await client.query('UPDATE bills SET status = $1, updated_at = NOW() WHERE id = $2', ['REJECTED', req.params.id]);
         const r = await client.query('SELECT * FROM bills WHERE id = $1 LIMIT 1', [req.params.id]);
+        await logAudit(req, 'BILL_REJECTED', 'BILL', req.params.id, { status: 'PENDING_APPROVAL' }, { status: 'REJECTED' });
         return res.json({ bill: r.rows[0], message: 'Bill rejected' });
       }).catch(() => res.status(500).json({ error: 'Failed to reject bill' }));
     }
     const db = getDb();
     db.get('bills').find({ id: req.params.id }).assign({ status: 'REJECTED', updated_at: new Date().toISOString() }).write();
     const bill = db.get('bills').find({ id: req.params.id }).value();
+    logAudit(req, 'BILL_REJECTED', 'BILL', req.params.id, { status: 'PENDING_APPROVAL' }, { status: 'REJECTED' });
     res.json({ bill, message: 'Bill rejected' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to reject bill' });
@@ -292,7 +299,7 @@ exports.generateMonthlyBills = (req, res) => {
           for (const member of chunk) {
             const id = uuidv4();
             const billNum = `BIL-${Date.now().toString(36).toUpperCase()}-${member.flat_number || 'NA'}`;
-            placeholders.push(`($${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},0,$${paramIdx-1},0,$${paramIdx++},$${paramIdx++},$${paramIdx++},NULL,$${paramIdx++},NULL,$${paramIdx++},$${paramIdx-1})`);
+            placeholders.push(`($${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},$${paramIdx++},0,$${paramIdx - 1},0,$${paramIdx++},$${paramIdx++},$${paramIdx++},NULL,$${paramIdx++},NULL,$${paramIdx++},$${paramIdx - 1})`);
             values.push(
               id, req.user.society_id, null, member.id, billNum,
               now.split('T')[0], due_date || null, parseFloat(amount),
@@ -390,7 +397,7 @@ exports.recordPayment = (req, res) => {
   try {
     const { bill_id, amount, payment_method, payment_reference, member_id } = req.body;
     const now = new Date().toISOString();
-    
+
     let targetMemberId = req.user.id;
     if (['ADMIN', 'TREASURER', 'MAKER', 'CHECKER'].includes(req.user.role) && member_id) {
       targetMemberId = member_id;
@@ -419,6 +426,7 @@ exports.recordPayment = (req, res) => {
             await client.query('UPDATE bills SET paid_amount = $1, status = $2, updated_at = $3 WHERE id = $4', [newPaid, newStatus, now, bill_id]);
           }
         }
+        await logAudit(req, 'PAYMENT_RECEIVED', 'PAYMENT', payment.id, null, { amount: payment.amount, bill_id: payment.bill_id });
         return res.status(201).json({ message: 'Payment recorded successfully', payment_id: payment.id });
       }).catch((error) => {
         console.error('Payment error:', error);
@@ -437,6 +445,7 @@ exports.recordPayment = (req, res) => {
       }
     }
 
+    logAudit(req, 'PAYMENT_RECEIVED', 'PAYMENT', payment.id, null, { amount: payment.amount, bill_id: payment.bill_id });
     res.status(201).json({ message: 'Payment recorded successfully', payment_id: payment.id });
   } catch (error) {
     console.error('Payment error:', error);
@@ -451,8 +460,8 @@ exports.getBillingSummary = (req, res) => {
         await ensureTenantBillingTables(client);
         const isResident = req.user.role === 'RESIDENT';
         const billsQuery = isResident
-          ? "SELECT COALESCE(SUM(total_amount), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills WHERE member_id = $1"
-          : "SELECT COALESCE(SUM(total_amount), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills";
+          ? "SELECT COALESCE(SUM(CASE WHEN status != 'REJECTED' THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills WHERE member_id = $1"
+          : "SELECT COALESCE(SUM(CASE WHEN status != 'REJECTED' THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills";
 
         const paymentsQuery = isResident
           ? "SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS' AND member_id = $1"
@@ -493,7 +502,7 @@ exports.getBillingSummary = (req, res) => {
       ? db.get('payments').filter({ society_id: sid, status: 'SUCCESS', member_id: req.user.id }).value()
       : db.get('payments').filter({ society_id: sid, status: 'SUCCESS' }).value();
 
-    const totalBilled = bills.reduce((sum, b) => sum + (b.total_amount || 0), 0);
+    const totalBilled = bills.filter(b => b.status !== 'REJECTED').reduce((sum, b) => sum + (b.total_amount || 0), 0);
     const totalCollected = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
     const pendingBills = bills.filter(b => !['PAID', 'REJECTED'].includes(b.status)).length;
     const now = new Date().toISOString().split('T')[0];

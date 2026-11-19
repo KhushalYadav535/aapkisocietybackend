@@ -94,7 +94,7 @@ exports.getByQr = async (req, res) => {
     if (isPostgresEnabled) {
       await ensureAssetTables(societyId);
       const r = await pool.query(
-        `SELECT * FROM \"society_${societyId}\".assets WHERE qr_code=$1 AND society_id=$2`,
+        `SELECT * FROM \"society_${societyId}\".assets WHERE (qr_code=$1 OR asset_code=$1 OR id=$1) AND society_id=$2`,
         [qrCode, societyId]
       );
       if (r.rows.length === 0) return res.status(404).json({ error: 'Asset not found' });
@@ -106,7 +106,7 @@ exports.getByQr = async (req, res) => {
       return res.json({ asset: r.rows[0], service_logs: logs.rows });
     }
     const db = getDb();
-    const asset = db.get('assets') ? db.get('assets').find(a => a.qr_code === qrCode && a.society_id === societyId).value() : null;
+    const asset = db.get('assets') ? db.get('assets').find(a => (a.qr_code === qrCode || a.asset_code === qrCode || a.id === qrCode) && a.society_id === societyId).value() : null;
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
     const logs = db.get('asset_service_logs') ? db.get('asset_service_logs').filter(l => l.asset_id === asset.id).sortBy('service_date').reverse().take(10).value() : [];
     res.json({ asset, service_logs: logs });
