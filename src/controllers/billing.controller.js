@@ -460,8 +460,8 @@ exports.getBillingSummary = (req, res) => {
         await ensureTenantBillingTables(client);
         const isResident = req.user.role === 'RESIDENT';
         const billsQuery = isResident
-          ? "SELECT COALESCE(SUM(CASE WHEN status != 'REJECTED' THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills WHERE member_id = $1"
-          : "SELECT COALESCE(SUM(CASE WHEN status != 'REJECTED' THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status != 'PAID' AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills";
+          ? "SELECT COALESCE(SUM(CASE WHEN status IN ('APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE') THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills WHERE member_id = $1"
+          : "SELECT COALESCE(SUM(CASE WHEN status IN ('APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE') THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills";
 
         const paymentsQuery = isResident
           ? "SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS' AND member_id = $1"
@@ -502,11 +502,12 @@ exports.getBillingSummary = (req, res) => {
       ? db.get('payments').filter({ society_id: sid, status: 'SUCCESS', member_id: req.user.id }).value()
       : db.get('payments').filter({ society_id: sid, status: 'SUCCESS' }).value();
 
-    const totalBilled = bills.filter(b => b.status !== 'REJECTED').reduce((sum, b) => sum + (b.total_amount || 0), 0);
+    const activeStatuses = ['APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE'];
+    const totalBilled = bills.filter(b => activeStatuses.includes(b.status)).reduce((sum, b) => sum + (b.total_amount || 0), 0);
     const totalCollected = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-    const pendingBills = bills.filter(b => !['PAID', 'REJECTED'].includes(b.status)).length;
+    const pendingBills = bills.filter(b => ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status)).length;
     const now = new Date().toISOString().split('T')[0];
-    const overdueBills = bills.filter(b => b.status !== 'PAID' && b.due_date && b.due_date < now).length;
+    const overdueBills = bills.filter(b => ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status) && b.due_date && b.due_date < now).length;
 
     res.json({
       summary: {

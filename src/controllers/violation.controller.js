@@ -2,6 +2,22 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled } = require('../config/postgres');
 
+const matchesUnit = (itemFlat, itemWing, userFlat, userWing) => {
+  if (!userFlat) return false;
+  const f1 = String(itemFlat || '').trim().toUpperCase();
+  const w1 = String(itemWing || '').trim().toUpperCase();
+  const f2 = String(userFlat || '').trim().toUpperCase();
+  const w2 = String(userWing || '').trim().toUpperCase();
+
+  if (f1 === f2 && (!w1 || !w2 || w1 === w2)) return true;
+  if (w2 && (f1 === `${w2}-${f2}` || f1 === `${w2}${f2}`)) return true;
+  if (w1 && (f2 === `${w1}-${f1}` || f2 === `${w1}${f1}`)) return true;
+  const c1 = (w1 + f1).replace(/[^A-Z0-9]/g, '');
+  const c2 = (w2 + f2).replace(/[^A-Z0-9]/g, '');
+  if (c1 && c2 && (c1 === c2 || c1 === f2.replace(/[^A-Z0-9]/g, '') || c2 === f1.replace(/[^A-Z0-9]/g, ''))) return true;
+  return false;
+};
+
 const ensureViolationTable = async (client) => {
   await client.query(`
     CREATE TABLE IF NOT EXISTS rule_violations (
@@ -40,8 +56,22 @@ exports.getAll = async (req, res) => {
 
         // If resident, they can see violations they reported OR violations against their flat
         if (req.user.role === 'RESIDENT' && req.user.flat_number) {
-          query += ` AND (reported_by_id = $2 OR (violator_flat = $3 AND (violator_wing = $4 OR violator_wing IS NULL)))`;
-          params.push(req.user.id, req.user.flat_number, req.user.wing || 'A');
+          const userFlat = String(req.user.flat_number || '').trim();
+          const userWing = String(req.user.wing || '').trim();
+          const combined = userWing ? `${userWing}-${userFlat}` : userFlat;
+          const cleanUser = (userWing + userFlat).replace(/[^A-Za-z0-9]/g, '');
+          params.push(req.user.id, userFlat, combined, cleanUser);
+          const pId = params.length - 3;
+          const pFlat = params.length - 2;
+          const pComb = params.length - 1;
+          const pClean = params.length;
+          query += ` AND (
+            reported_by_id = $${pId}
+            OR violator_flat = $${pFlat}
+            OR violator_flat = $${pComb}
+            OR REPLACE(REPLACE(violator_flat, '-', ''), ' ', '') = $${pClean}
+            OR REPLACE(REPLACE(CONCAT(violator_wing, violator_flat), '-', ''), ' ', '') = $${pClean}
+          )`;
         }
 
         query += ' ORDER BY created_at DESC';
@@ -58,7 +88,7 @@ exports.getAll = async (req, res) => {
     if (req.user.role === 'RESIDENT' && req.user.flat_number) {
       violations = violations.filter(v => 
         v.reported_by_id === req.user.id || 
-        (v.violator_flat === req.user.flat_number && (!v.violator_wing || v.violator_wing === req.user.wing))
+        matchesUnit(v.violator_flat, v.violator_wing, req.user.flat_number, req.user.wing)
       );
     }
     return res.json({ violations });

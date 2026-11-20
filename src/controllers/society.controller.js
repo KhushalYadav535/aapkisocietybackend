@@ -211,12 +211,24 @@ exports.getById = (req, res) => {
         const r = await pool.query('SELECT * FROM platform.societies WHERE id = $1 LIMIT 1', [req.params.id]);
         const society = r.rows[0];
         if (!society) return res.status(404).json({ error: 'Society not found' });
+        try {
+          const flatsR = await pool.query('SELECT COUNT(*)::int AS c FROM platform.flats WHERE society_id = $1', [req.params.id]);
+          if (flatsR.rows[0]?.c) {
+            society.total_flats = flatsR.rows[0].c;
+            society.total_units = flatsR.rows[0].c;
+          }
+        } catch (_) {}
         return res.json({ society });
       }).catch(() => res.status(500).json({ error: 'Failed to fetch society' }));
     }
     const db = getDb();
     const society = db.get('societies').find({ id: req.params.id }).value();
     if (!society) return res.status(404).json({ error: 'Society not found' });
+    const flatsCount = (db.get('flats').value() || []).filter(f => f.society_id === req.params.id).length;
+    if (flatsCount > 0) {
+      society.total_flats = flatsCount;
+      society.total_units = flatsCount;
+    }
     res.json({ society });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch society' });

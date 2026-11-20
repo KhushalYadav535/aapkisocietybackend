@@ -165,8 +165,9 @@ exports.createAccount = async (req, res) => {
 exports.getVouchers = async (req, res) => {
   try {
     const { status, type, from, to } = req.query;
-    if (isPostgresEnabled && req.user.society_id) {
-      return withTenant(req.user.society_id, async (client) => {
+    const societyId = req.user.society_id || req.query.society_id;
+    if (isPostgresEnabled && societyId) {
+      return withTenant(societyId, async (client) => {
         await ensureAccountingTables(client);
         let q = 'SELECT * FROM vouchers WHERE 1=1';
         const params = [];
@@ -181,7 +182,7 @@ exports.getVouchers = async (req, res) => {
       }).catch(() => res.status(500).json({ error: 'Failed to fetch vouchers' }));
     }
     const db = getDb();
-    let vouchers = db.get('vouchers').filter({ society_id: req.user.society_id }).value() || [];
+    let vouchers = (db.get('vouchers').value() || []).filter(v => !societyId || v.society_id === societyId);
     if (status) vouchers = vouchers.filter(v => v.status === status);
     if (type)   vouchers = vouchers.filter(v => v.voucher_type === type);
     res.json({ vouchers });
@@ -209,28 +210,29 @@ exports.createVoucher = async (req, res) => {
     const voucher_number = generateVoucherNumber(voucher_type);
     const fiscal_year = currentFiscalYear();
     const now = new Date().toISOString();
+    const societyId = req.user.society_id || req.body.society_id || req.query.society_id;
 
     const voucher = {
       id, voucher_number, voucher_type, amount: totalDr,
       narration: narration || null, status: 'DRAFT',
       maker_id: req.user.id, checker_id: null, reversal_of: null,
-      fiscal_year, voucher_date, society_id: req.user.society_id,
+      fiscal_year, voucher_date, society_id: societyId,
       created_at: now, updated_at: now
     };
 
-    if (isPostgresEnabled && req.user.society_id) {
-      return withTenant(req.user.society_id, async (client) => {
+    if (isPostgresEnabled && societyId) {
+      return withTenant(societyId, async (client) => {
         await ensureAccountingTables(client);
         await client.query(
           `INSERT INTO vouchers (id,voucher_number,voucher_type,amount,narration,status,maker_id,checker_id,reversal_of,fiscal_year,voucher_date,society_id)
            VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,NULL,NULL,$7,$8,$9)`,
-          [id, voucher_number, voucher_type, totalDr, narration || null, req.user.id, fiscal_year, voucher_date, req.user.society_id]
+          [id, voucher_number, voucher_type, totalDr, narration || null, req.user.id, fiscal_year, voucher_date, societyId]
         );
         for (const entry of entries) {
           await client.query(
             `INSERT INTO ledger_entries (id,voucher_id,account_id,entry_type,amount,narration,entry_date,society_id)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [uuidv4(), id, entry.account_id, entry.entry_type, parseFloat(entry.amount), entry.narration || narration || null, voucher_date, req.user.society_id]
+            [uuidv4(), id, entry.account_id, entry.entry_type, parseFloat(entry.amount), entry.narration || narration || null, voucher_date, societyId]
           );
         }
         await logAudit(req, 'VOUCHER_CREATED', 'voucher', id, null, voucher, client);
@@ -244,8 +246,9 @@ exports.createVoucher = async (req, res) => {
     if (!db.get('ledger_entries').value()) db.set('ledger_entries', []).write();
     db.get('vouchers').push(voucher).write();
     for (const entry of entries) {
-      db.get('ledger_entries').push({ id: uuidv4(), voucher_id: id, account_id: entry.account_id, entry_type: entry.entry_type, amount: parseFloat(entry.amount), narration: entry.narration || narration || null, entry_date: voucher_date, society_id: req.user.society_id, created_at: now }).write();
+      db.get('ledger_entries').push({ id: uuidv4(), voucher_id: id, account_id: entry.account_id, entry_type: entry.entry_type, amount: parseFloat(entry.amount), narration: entry.narration || narration || null, entry_date: voucher_date, society_id: societyId, created_at: now }).write();
     }
+    logAudit(req, 'VOUCHER_CREATED', 'voucher', id, null, voucher);
     res.status(201).json({ voucher, message: 'Voucher created — pending approval' });
   } catch (e) {
     console.error(e);

@@ -163,37 +163,106 @@ function escapeXml(str) {
     .replace(/'/g, '&apos;');
 }
 
+const fetchReportData = async (societyId, reportType, fromDate, toDate) => {
+  const from = fromDate || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+  const to = toDate || new Date().toISOString().split('T')[0];
+  
+  if (isPostgresEnabled && societyId) {
+    return withTenant(societyId, async (client) => {
+      if (reportType === 'billing') {
+        const { rows } = await client.query(`
+          SELECT b.bill_number, b.bill_date, b.due_date, b.total_amount, b.paid_amount, b.status, b.bill_type,
+                 u.first_name || ' ' || u.last_name as member_name, u.flat_number, u.wing
+          FROM bills b
+          LEFT JOIN platform.users u ON u.id = b.member_id
+          WHERE b.society_id = $1 AND b.bill_date BETWEEN $2 AND $3
+          ORDER BY b.bill_date DESC
+        `, [societyId, from, to]);
+        return rows.length > 0 ? rows : [{ info: 'No bills found for the selected period', period: `${from} to ${to}` }];
+      } else if (reportType === 'collection') {
+        const { rows } = await client.query(`
+          SELECT p.id, p.payment_date, p.amount, p.payment_method, p.status,
+                 u.first_name || ' ' || u.last_name as member_name, u.flat_number
+          FROM payments p
+          LEFT JOIN platform.users u ON u.id = p.member_id
+          WHERE p.society_id = $1 AND p.payment_date::date BETWEEN $2 AND $3
+          ORDER BY p.payment_date DESC
+        `, [societyId, from, to]);
+        return rows.length > 0 ? rows : [{ info: 'No collections found for the selected period', period: `${from} to ${to}` }];
+      } else if (reportType === 'visitors') {
+        const { rows } = await client.query(`
+          SELECT visitor_name, visitor_phone, purpose, flat_number, wing, check_in, check_out, status
+          FROM visitors WHERE society_id = $1 ORDER BY check_in DESC LIMIT 200
+        `, [societyId]);
+        return rows.length > 0 ? rows : [{ info: 'No visitors found', period: `${from} to ${to}` }];
+      } else if (reportType === 'complaints') {
+        const { rows } = await client.query(`
+          SELECT title, category, priority, status, created_at
+          FROM complaints WHERE society_id = $1 ORDER BY created_at DESC LIMIT 200
+        `, [societyId]);
+        return rows.length > 0 ? rows : [{ info: 'No complaints found', period: `${from} to ${to}` }];
+      }
+      return [{ message: 'Report generated', report_type: reportType, from, to }];
+    }).catch(() => [{ message: 'No records found', report_type: reportType, from, to }]);
+  }
+
+  // LowDB fallback
+  const { getDb } = require('../config/database');
+  const db = getDb();
+  if (reportType === 'billing') {
+    const bills = (db.get('bills').value() || []).filter(b => b.society_id === societyId);
+    return bills.length > 0 ? bills.map(b => ({
+      bill_number: b.bill_number, bill_date: b.bill_date, amount: b.total_amount, status: b.status, bill_type: b.bill_type
+    })) : [{ info: 'No bills recorded', period: `${from} to ${to}` }];
+  } else if (reportType === 'collection') {
+    const payments = (db.get('payments').value() || []).filter(p => p.society_id === societyId);
+    return payments.length > 0 ? payments.map(p => ({
+      id: p.id, payment_date: p.payment_date, amount: p.amount, method: p.payment_method, status: p.status
+    })) : [{ info: 'No payments recorded', period: `${from} to ${to}` }];
+  } else if (reportType === 'visitors') {
+    const visitors = (db.get('visitors').value() || []).filter(v => v.society_id === societyId);
+    return visitors.length > 0 ? visitors.map(v => ({
+      name: v.visitor_name, flat: v.flat_number, check_in: v.check_in, status: v.status
+    })) : [{ info: 'No visitors recorded', period: `${from} to ${to}` }];
+  } else if (reportType === 'complaints') {
+    const complaints = (db.get('complaints').value() || []).filter(c => c.society_id === societyId);
+    return complaints.length > 0 ? complaints.map(c => ({
+      title: c.title, category: c.category, priority: c.priority, status: c.status
+    })) : [{ info: 'No complaints recorded', period: `${from} to ${to}` }];
+  }
+  return [{ report: reportType, from, to, status: 'Generated' }];
+};
+
 // ─── Excel Export (using json2csv / xlsx) ──────────────────────────────
 exports.excelExport = async (req, res) => {
   try {
-    const { report_type, from_date, to_date, data } = req.body;
-
-    // If data is provided directly, export it
-    if (data && Array.isArray(data)) {
-      const XLSX = require('xlsx');
-      const ws = XLSX.utils.json_to_sheet(data);
-
-      // Format currency columns
-      const range = XLSX.utils.decode_range(ws['!ref']);
-      for (let row = range.s.r + 1; row <= range.e.r; row++) {
-        for (let col = range.s.c; col <= range.e.c; col++) {
-          const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
-          if (cell && typeof cell.v === 'number') {
-            cell.z = '"\\u20B9"#,##0.00';
-          }
-        }
-      }
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, report_type || 'Report');
-      const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename="${report_type || 'report'}_${Date.now()}.xlsx"`);
-      return res.send(buf);
+    const { report_type, from_date, to_date, start_date, end_date, data } = req.body;
+    let exportData = data;
+    if (!exportData || !Array.isArray(exportData) || exportData.length === 0) {
+      exportData = await fetchReportData(req.user.society_id, report_type, from_date || start_date, to_date || end_date);
     }
 
-    res.status(400).json({ error: 'No data provided for export' });
+    const XLSX = require('xlsx');
+    const ws = XLSX.utils.json_to_sheet(exportData);
+
+    // Format currency columns
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+    for (let row = range.s.r + 1; row <= range.e.r; row++) {
+      for (let col = range.s.c; col <= range.e.c; col++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
+        if (cell && typeof cell.v === 'number') {
+          cell.z = '"\\u20B9"#,##0.00';
+        }
+      }
+    }
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, report_type || 'Report');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${report_type || 'report'}_${Date.now()}.xlsx"`);
+    return res.send(buf);
   } catch (error) {
     console.error('Excel export error:', error);
     res.status(500).json({ error: 'Failed to export Excel' });
@@ -234,10 +303,11 @@ exports.multiSheetExcelExport = async (req, res) => {
 // ─── PDF Export ────────────────────────────────────────────────────────
 exports.pdfExport = async (req, res) => {
   try {
-    const { report_type, title, from_date, to_date, society_name, generated_by, data } = req.body;
+    const { report_type, title, from_date, to_date, start_date, end_date, society_name, generated_by, data } = req.body;
 
-    if (!data || !Array.isArray(data)) {
-      return res.status(400).json({ error: 'No data provided for export' });
+    let exportData = data;
+    if (!exportData || !Array.isArray(exportData) || exportData.length === 0) {
+      exportData = await fetchReportData(req.user.society_id, report_type, from_date || start_date, to_date || end_date);
     }
 
     // Generate PDF using pdfkit (if available) or return data with formatting instructions
@@ -258,13 +328,13 @@ exports.pdfExport = async (req, res) => {
       // Header
       doc.fontSize(16).text(society_name || 'AapkiSociety', { align: 'center' });
       doc.fontSize(12).text(title || report_type, { align: 'center' });
-      doc.fontSize(10).text(`Period: ${from_date} to ${to_date}`, { align: 'center' });
+      doc.fontSize(10).text(`Period: ${from_date || start_date || 'All'} to ${to_date || end_date || 'All'}`, { align: 'center' });
       doc.fontSize(8).text(`Generated: ${new Date().toLocaleString('en-IN')} | ${generated_by || 'System'}`, { align: 'center' });
       doc.moveDown(2);
 
       // Table
-      if (data.length > 0) {
-        const keys = Object.keys(data[0]);
+      if (exportData.length > 0) {
+        const keys = Object.keys(exportData[0]);
         const tableTop = doc.y;
         const colWidths = keys.map((_, i) => Math.floor((doc.page.width - 100) / keys.length));
 

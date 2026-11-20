@@ -22,6 +22,7 @@ router.post('/', requirePermission('USER_CREATE'), [
 ], validate, memberController.create);
 router.put('/:id', requirePermission('USER_CREATE'), memberController.update);
 router.delete('/:id', requirePermission('USER_CREATE'), memberController.deactivate);
+router.put('/:id/reactivate', requirePermission('USER_CREATE'), memberController.reactivate);
 router.post('/:id/transfer', requirePermission('USER_CREATE'), memberController.transferOwnership);
 
 module.exports = router;

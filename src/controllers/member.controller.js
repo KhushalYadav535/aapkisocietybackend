@@ -218,6 +218,36 @@ exports.deactivate = (req, res) => {
   }
 };
 
+exports.reactivate = (req, res) => {
+  try {
+    if (isPostgresEnabled) {
+      return (async () => {
+        let query = 'UPDATE platform.users SET is_active = 1, updated_at = NOW() WHERE id = $1';
+        let params = [req.params.id];
+        if (req.user.role !== 'PLATFORM_ADMIN') {
+          query += ' AND society_id = $2';
+          params.push(req.user.society_id);
+        }
+        const result = await pool.query(query, params);
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Member not found or unauthorized' });
+        await logAudit(req, 'MEMBER_REACTIVATED', 'USER', req.params.id, null, { is_active: 1 });
+        return res.json({ message: 'Member reactivated successfully' });
+      })().catch(() => res.status(500).json({ error: 'Failed to reactivate member' }));
+    }
+    const db = getDb();
+    const existing = db.get('users').find({ id: req.params.id }).value();
+    if (!existing) return res.status(404).json({ error: 'Member not found' });
+    if (req.user.role !== 'PLATFORM_ADMIN' && existing.society_id !== req.user.society_id) {
+      return res.status(403).json({ error: 'Cross-tenant access denied' });
+    }
+    db.get('users').find({ id: req.params.id }).assign({ is_active: 1, updated_at: new Date().toISOString() }).write();
+    logAudit(req, 'MEMBER_REACTIVATED', 'USER', req.params.id, null, { is_active: 1 });
+    res.json({ message: 'Member reactivated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to reactivate member' });
+  }
+};
+
 exports.transferOwnership = (req, res) => {
   try {
     res.json({ message: 'Ownership transfer initiated', status: 'PENDING_REVIEW' });

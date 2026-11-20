@@ -248,31 +248,36 @@ exports.setupMFA = async (req, res) => {
       return res.status(404).json({ error: 'User or email address not found' });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Debounce / reuse recent pending OTP if generated within last 30 seconds
+    let otp = user.pending_mfa_code;
+    const lastUpdate = user.updated_at ? new Date(user.updated_at).getTime() : 0;
+    const isRecent = otp && (Date.now() - lastUpdate < 30000);
+    if (!isRecent) {
+      otp = Math.floor(100000 + Math.random() * 900000).toString();
+      if (isPostgresEnabled) {
+        await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS pending_mfa_code TEXT');
+        await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS mfa_method TEXT');
+        await pool.query(
+          'UPDATE platform.users SET pending_mfa_code = $1, mfa_method = $2, updated_at = NOW() WHERE id = $3',
+          [otp, 'EMAIL_OTP', req.user.id]
+        );
+      } else {
+        const db = getDb();
+        db.get('users').find({ id: req.user.id }).assign({
+          pending_mfa_code: otp,
+          mfa_method: 'EMAIL_OTP',
+          updated_at: now
+        }).write();
+      }
 
-    if (isPostgresEnabled) {
-      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS pending_mfa_code TEXT');
-      await pool.query('ALTER TABLE platform.users ADD COLUMN IF NOT EXISTS mfa_method TEXT');
-      await pool.query(
-        'UPDATE platform.users SET pending_mfa_code = $1, mfa_method = $2, updated_at = NOW() WHERE id = $3',
-        [otp, 'EMAIL_OTP', req.user.id]
-      );
-    } else {
-      const db = getDb();
-      db.get('users').find({ id: req.user.id }).assign({
-        pending_mfa_code: otp,
-        mfa_method: 'EMAIL_OTP',
-        updated_at: now
-      }).write();
+      try {
+        await sendMfaOtpEmail(user.email, otp, user.first_name || 'Member');
+      } catch (mailErr) {
+        console.error('Failed to send verification OTP email:', mailErr.message);
+      }
+
+      logAudit(req, 'EMAIL_OTP_SENT', 'USER', req.user.id, null, { email: user.email });
     }
-
-    try {
-      await sendMfaOtpEmail(user.email, otp, user.first_name || 'Member');
-    } catch (mailErr) {
-      console.error('Failed to send verification OTP email:', mailErr.message);
-    }
-
-    logAudit(req, 'EMAIL_OTP_SENT', 'USER', req.user.id, null, { email: user.email });
 
     res.json({
       message: `A 6-digit verification code has been sent to ${user.email}.`,

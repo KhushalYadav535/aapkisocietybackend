@@ -1,9 +1,29 @@
-const { pool, getTenantSchemaName } = require('../config/postgres');
+const { pool, getTenantSchemaName, isPostgresEnabled } = require('../config/postgres');
 const { v4: uuidv4 } = require('uuid');
 const { logAudit } = require('./audit.controller');
 
 const getActivePermissions = async (req, res) => {
   try {
+    const role = (req.user?.role || '').toUpperCase();
+
+    if (!isPostgresEnabled) {
+      let permissions = [];
+      if (['ADMIN', 'PLATFORM_ADMIN'].includes(role)) {
+        permissions = ['*'];
+      } else if (['COMMITTEE', 'SECRETARY'].includes(role)) {
+        permissions = ['COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'SOCIETY_MANAGE', 'NOC_MANAGE', 'NOC_APPROVE', 'VIOLATION_MANAGE', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'NOTICE_CREATE'];
+      } else if (['TREASURER', 'TREASURY'].includes(role)) {
+        permissions = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'BILLING_CREATE', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'TAX_MANAGE', 'TAX_VIEW'];
+      } else if (['CHECKER', 'TREASURY_CHECKER'].includes(role)) {
+        permissions = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'COMPLIANCE_MANAGE', 'TAX_MANAGE', 'TAX_VIEW', 'NOTIFICATION_MANAGE'];
+      } else if (['MAKER', 'TREASURY_MAKER'].includes(role)) {
+        permissions = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_CREATE', 'COMPLIANCE_MANAGE'];
+      } else if (role === 'GUARD') {
+        permissions = ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'];
+      }
+      return res.json({ permissions });
+    }
+
     const societyId = req.query.societyId || req.user.society_id;
     if (!societyId) {
       if (req.user.role === 'PLATFORM_ADMIN') {
@@ -31,11 +51,27 @@ const getActivePermissions = async (req, res) => {
         AND CURRENT_DATE BETWEEN spa.start_date AND spa.end_date
     `;
     
-    const result = await pool.query(query, [req.user.id]);
-    let permissions = result.rows.map(r => r.code);
-    if (req.user.role === 'GUARD') {
-      const guardPerms = ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'];
-      permissions = Array.from(new Set([...permissions, ...guardPerms]));
+    let permissions = [];
+    try {
+      const result = await pool.query(query, [req.user.id]);
+      permissions = result.rows.map(r => r.code);
+    } catch (_) {}
+
+    if (['COMMITTEE', 'SECRETARY'].includes(role)) {
+      const perms = ['COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'SOCIETY_MANAGE', 'NOC_MANAGE', 'NOC_APPROVE', 'VIOLATION_MANAGE', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'NOTICE_CREATE'];
+      permissions = Array.from(new Set([...permissions, ...perms]));
+    } else if (['TREASURER', 'TREASURY'].includes(role)) {
+      const perms = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'BILLING_CREATE', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'TAX_MANAGE', 'TAX_VIEW'];
+      permissions = Array.from(new Set([...permissions, ...perms]));
+    } else if (['CHECKER', 'TREASURY_CHECKER'].includes(role)) {
+      const perms = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'COMPLIANCE_MANAGE', 'TAX_MANAGE', 'TAX_VIEW', 'NOTIFICATION_MANAGE'];
+      permissions = Array.from(new Set([...permissions, ...perms]));
+    } else if (['MAKER', 'TREASURY_MAKER'].includes(role)) {
+      const perms = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_CREATE', 'COMPLIANCE_MANAGE'];
+      permissions = Array.from(new Set([...permissions, ...perms]));
+    } else if (role === 'GUARD') {
+      const perms = ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'];
+      permissions = Array.from(new Set([...permissions, ...perms]));
     }
     
     res.json({ permissions });
@@ -82,10 +118,18 @@ const assignPosition = async (req, res) => {
       `, [positionCode, userId, startDate, endDate]);
 
       if (activeSingleCheck.rows.length > 0) {
-        const holder = activeSingleCheck.rows[0];
-        return res.status(400).json({ 
-          error: `An active ${positionCode} already exists for this term: ${holder.first_name || ''} ${holder.last_name || ''} (${holder.email}). Please expire or end the current term first.` 
-        });
+        if (req.body.replace_existing === true || req.body.replace_existing === 'true' || req.query.replace_existing === 'true') {
+          await pool.query(`
+            UPDATE "${schema}".society_position_assignments
+            SET status = 'EXPIRED', end_date = CURRENT_DATE, notes = 'Auto-ended upon appointment of successor'
+            WHERE id = $1
+          `, [activeSingleCheck.rows[0].id]);
+        } else {
+          const holder = activeSingleCheck.rows[0];
+          return res.status(400).json({ 
+            error: `An active ${positionCode} already exists for this term: ${holder.first_name || ''} ${holder.last_name || ''} (${holder.email}). Please expire or end the current term first or select Replace Existing Term.` 
+          });
+        }
       }
     }
 

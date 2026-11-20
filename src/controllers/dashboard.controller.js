@@ -27,15 +27,15 @@ exports.getStats = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         const isResident = req.user.role === 'RESIDENT';
-        const [usersR, flatsR, complaintsR, billsR, visitorsR, paymentsR, noticesR, monthlyPaymentsR] = await Promise.all([
+        const [usersR, flatsR, complaintsR, billsR, visitorsR, paymentsR, noticesR, monthlyPaymentsR, parcelsR, patrolsR] = await Promise.all([
           client.query('SELECT COUNT(*)::int AS c FROM platform.users WHERE society_id = $1 AND is_active = 1', [req.user.society_id]),
           client.query('SELECT COUNT(*)::int AS c FROM platform.flats WHERE society_id = $1', [req.user.society_id]),
           isResident
             ? client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE raised_by = $1 AND status IN ('OPEN','IN_PROGRESS')", [req.user.id])
             : client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE status IN ('OPEN','IN_PROGRESS')"),
           isResident
-            ? client.query("SELECT COUNT(*)::int AS c FROM bills WHERE member_id = $1 AND status NOT IN ('PAID','REJECTED')", [req.user.id])
-            : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status NOT IN ('PAID','REJECTED')"),
+            ? client.query("SELECT COUNT(*)::int AS c FROM bills WHERE member_id = $1 AND status IN ('APPROVED','PARTIALLY_PAID','OVERDUE')", [req.user.id])
+            : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status IN ('APPROVED','PARTIALLY_PAID','OVERDUE')"),
           client.query('SELECT COUNT(*)::int AS c FROM visitors WHERE DATE(check_in) = CURRENT_DATE'),
           isResident
             ? client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND member_id = $1", [req.user.id])
@@ -43,7 +43,9 @@ exports.getStats = (req, res) => {
           client.query('SELECT COUNT(*)::int AS c FROM notices WHERE is_published = 1'),
           isResident
             ? client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND member_id = $1 AND date_trunc('month', payment_date) = date_trunc('month', NOW())", [req.user.id])
-            : client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND date_trunc('month', payment_date) = date_trunc('month', NOW())")
+            : client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND date_trunc('month', payment_date) = date_trunc('month', NOW())"),
+          client.query("SELECT COUNT(*)::int AS c FROM parcels WHERE society_id = $1 AND status = 'AT_GATE'", [req.user.society_id]).catch(() => ({ rows: [{ c: 0 }] })),
+          client.query("SELECT COUNT(*)::int AS c FROM patrol_logs WHERE society_id = $1 AND DATE(scanned_at) = CURRENT_DATE", [req.user.society_id]).catch(() => ({ rows: [{ c: 0 }] }))
         ]);
         return res.json({
           stats: {
@@ -57,6 +59,8 @@ exports.getStats = (req, res) => {
             total_collection: Number(paymentsR.rows[0]?.s || 0),
             monthly_collection: Number(monthlyPaymentsR.rows[0]?.s || 0),
             active_notices: noticesR.rows[0]?.c || 0,
+            parcels_at_gate: parcelsR.rows[0]?.c || 0,
+            patrol_scans_today: patrolsR.rows[0]?.c || 0,
           }
         });
       }).catch((error) => {
@@ -91,10 +95,12 @@ exports.getStats = (req, res) => {
       ? db.get('complaints').filter(c => c.society_id === sid && c.raised_by === req.user.id && ['OPEN', 'IN_PROGRESS'].includes(c.status)).size().value()
       : db.get('complaints').filter(c => c.society_id === sid && ['OPEN', 'IN_PROGRESS'].includes(c.status)).size().value();
     const pendingBills = isResident
-      ? db.get('bills').filter(b => b.society_id === sid && b.member_id === req.user.id && !['PAID', 'REJECTED'].includes(b.status)).size().value()
-      : db.get('bills').filter(b => b.society_id === sid && !['PAID', 'REJECTED'].includes(b.status)).size().value();
+      ? db.get('bills').filter(b => b.society_id === sid && b.member_id === req.user.id && ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status)).size().value()
+      : db.get('bills').filter(b => b.society_id === sid && ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status)).size().value();
     const today = new Date().toISOString().split('T')[0];
     const todayVisitors = db.get('visitors').filter(v => v.society_id === sid && v.check_in && v.check_in.startsWith(today)).size().value();
+    const parcelsAtGate = (db.get('parcels').value() || []).filter(p => p.society_id === sid && p.status === 'AT_GATE').length;
+    const patrolScansToday = (db.get('patrol_logs').value() || []).filter(l => l.society_id === sid && l.scanned_at && l.scanned_at.startsWith(today)).length;
     const totalCollection = isResident
       ? db.get('payments').filter({ society_id: sid, status: 'SUCCESS', member_id: req.user.id }).reduce((sum, p) => sum + (p.amount || 0), 0).value()
       : db.get('payments').filter({ society_id: sid, status: 'SUCCESS' }).reduce((sum, p) => sum + (p.amount || 0), 0).value();
@@ -118,6 +124,8 @@ exports.getStats = (req, res) => {
         total_collection: totalCollection || 0,
         monthly_collection: monthlyCollection || 0,
         active_notices: activeNotices || 0,
+        parcels_at_gate: parcelsAtGate || 0,
+        patrol_scans_today: patrolScansToday || 0,
       }
     });
   } catch (error) {

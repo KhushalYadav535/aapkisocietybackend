@@ -2,6 +2,22 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled } = require('../config/postgres');
 
+const matchesUnit = (itemFlat, itemWing, userFlat, userWing) => {
+  if (!userFlat) return false;
+  const f1 = String(itemFlat || '').trim().toUpperCase();
+  const w1 = String(itemWing || '').trim().toUpperCase();
+  const f2 = String(userFlat || '').trim().toUpperCase();
+  const w2 = String(userWing || '').trim().toUpperCase();
+
+  if (f1 === f2 && (!w1 || !w2 || w1 === w2)) return true;
+  if (w2 && (f1 === `${w2}-${f2}` || f1 === `${w2}${f2}`)) return true;
+  if (w1 && (f2 === `${w1}-${f1}` || f2 === `${w1}${f1}`)) return true;
+  const c1 = (w1 + f1).replace(/[^A-Z0-9]/g, '');
+  const c2 = (w2 + f2).replace(/[^A-Z0-9]/g, '');
+  if (c1 && c2 && (c1 === c2 || c1 === f2.replace(/[^A-Z0-9]/g, '') || c2 === f1.replace(/[^A-Z0-9]/g, ''))) return true;
+  return false;
+};
+
 const ensureMoveRequestTable = async (client) => {
   await client.query(`
     CREATE TABLE IF NOT EXISTS move_requests (
@@ -46,13 +62,22 @@ exports.getAll = async (req, res) => {
         let params = [societyId];
 
         if (req.user.role === 'RESIDENT') {
-          params.push(req.user.id);
-          query += ` AND (user_id = $${params.length}`;
-          if (req.user.flat_number) {
-            params.push(req.user.flat_number);
-            query += ` OR flat_number = $${params.length}`;
-          }
-          query += ')';
+          const userFlat = String(req.user.flat_number || '').trim();
+          const userWing = String(req.user.wing || '').trim();
+          const combined = userWing ? `${userWing}-${userFlat}` : userFlat;
+          const cleanUser = (userWing + userFlat).replace(/[^A-Za-z0-9]/g, '');
+          params.push(req.user.id, userFlat, combined, cleanUser);
+          const pId = params.length - 3;
+          const pFlat = params.length - 2;
+          const pComb = params.length - 1;
+          const pClean = params.length;
+          query += ` AND (
+            user_id = $${pId}
+            OR flat_number = $${pFlat}
+            OR flat_number = $${pComb}
+            OR REPLACE(REPLACE(flat_number, '-', ''), ' ', '') = $${pClean}
+            OR REPLACE(REPLACE(CONCAT(wing, flat_number), '-', ''), ' ', '') = $${pClean}
+          )`;
         }
 
         query += ' ORDER BY created_at DESC';
@@ -67,7 +92,7 @@ exports.getAll = async (req, res) => {
     const db = getDb();
     let requests = (db.get('move_requests').value() || []).filter(r => r.society_id === societyId);
     if (req.user.role === 'RESIDENT') {
-      requests = requests.filter(r => r.user_id === req.user.id || (req.user.flat_number && r.flat_number === req.user.flat_number));
+      requests = requests.filter(r => r.user_id === req.user.id || matchesUnit(r.flat_number, r.wing, req.user.flat_number, req.user.wing));
     }
     requests.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return res.json({ requests });

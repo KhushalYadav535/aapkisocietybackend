@@ -202,7 +202,20 @@ exports.getSummary = async (req, res) => {
       );
       return res.json({ summary: r.rows });
     }
-    res.json({ summary: [] });
+    const db = getDb();
+    const today = new Date().toISOString().split('T')[0];
+    const cps = (db.get('patrol_checkpoints').value() || []).filter(c => c.society_id === societyId && c.is_active !== 0);
+    const logs = (db.get('patrol_logs').value() || []).filter(l => l.society_id === societyId && l.scanned_at && l.scanned_at.startsWith(today));
+    const summary = cps.map(pc => {
+      const pcLogs = logs.filter(l => l.checkpoint_id === pc.id);
+      return {
+        location_name: pc.location_name,
+        area: pc.area,
+        scan_count: pcLogs.length,
+        last_scanned: pcLogs.length > 0 ? pcLogs.sort((a, b) => new Date(b.scanned_at) - new Date(a.scanned_at))[0].scanned_at : null
+      };
+    });
+    res.json({ summary });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get patrol summary' });
   }

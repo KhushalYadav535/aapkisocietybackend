@@ -2,6 +2,22 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
 const { withTenant, isPostgresEnabled, ensureTenantFeatureTables } = require('../config/postgres');
 
+const matchesUnit = (itemFlat, itemWing, userFlat, userWing) => {
+  if (!userFlat) return true;
+  const f1 = String(itemFlat || '').trim().toUpperCase();
+  const w1 = String(itemWing || '').trim().toUpperCase();
+  const f2 = String(userFlat || '').trim().toUpperCase();
+  const w2 = String(userWing || '').trim().toUpperCase();
+
+  if (f1 === f2 && (!w1 || !w2 || w1 === w2)) return true;
+  if (w2 && (f1 === `${w2}-${f2}` || f1 === `${w2}${f2}`)) return true;
+  if (w1 && (f2 === `${w1}-${f1}` || f2 === `${w1}${f1}`)) return true;
+  const c1 = (w1 + f1).replace(/[^A-Z0-9]/g, '');
+  const c2 = (w2 + f2).replace(/[^A-Z0-9]/g, '');
+  if (c1 && c2 && (c1 === c2 || c1 === f2.replace(/[^A-Z0-9]/g, '') || c2 === f1.replace(/[^A-Z0-9]/g, ''))) return true;
+  return false;
+};
+
 const ensureParcelTable = async (client) => {
   await client.query(`
     CREATE TABLE IF NOT EXISTS parcels (
@@ -39,12 +55,20 @@ exports.getAll = async (req, res) => {
         let params = [societyId];
 
         if (req.user.role === 'RESIDENT' && req.user.flat_number) {
-          params.push(req.user.flat_number);
-          query += ` AND flat_number = $${params.length}`;
-          if (req.user.wing) {
-            params.push(req.user.wing);
-            query += ` AND wing = $${params.length}`;
-          }
+          const userFlat = String(req.user.flat_number).trim();
+          const userWing = String(req.user.wing || '').trim();
+          const combined = userWing ? `${userWing}-${userFlat}` : userFlat;
+          const cleanUser = (userWing + userFlat).replace(/[^A-Za-z0-9]/g, '');
+          params.push(userFlat, combined, cleanUser);
+          const p1 = params.length - 2;
+          const p2 = params.length - 1;
+          const p3 = params.length;
+          query += ` AND (
+            flat_number = $${p1}
+            OR flat_number = $${p2}
+            OR REPLACE(REPLACE(flat_number, '-', ''), ' ', '') = $${p3}
+            OR (REPLACE(REPLACE(CONCAT(wing, flat_number), '-', ''), ' ', '') = $${p3})
+          )`;
         }
 
         query += ' ORDER BY created_at DESC';
@@ -59,7 +83,7 @@ exports.getAll = async (req, res) => {
     const db = getDb();
     let parcels = (db.get('parcels').value() || []).filter(p => p.society_id === societyId);
     if (req.user.role === 'RESIDENT' && req.user.flat_number) {
-      parcels = parcels.filter(p => p.flat_number === req.user.flat_number);
+      parcels = parcels.filter(p => matchesUnit(p.flat_number, p.wing, req.user.flat_number, req.user.wing));
     }
     parcels.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return res.json({ parcels });
@@ -89,6 +113,16 @@ exports.create = async (req, res) => {
       return res.status(400).json({ error: 'Flat number and delivery company are required' });
     }
 
+    let finalFlat = String(flat_number || '').trim();
+    let finalWing = String(wing || '').trim().toUpperCase();
+    if (!finalWing && finalFlat.includes('-')) {
+      const parts = finalFlat.split('-');
+      if (parts.length === 2 && isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
+        finalWing = parts[0].toUpperCase();
+        finalFlat = parts[1];
+      }
+    }
+
     // Generate random secure 4-digit pickup PIN
     const pickup_pin = Math.floor(1000 + Math.random() * 9000).toString();
     const id = uuidv4();
@@ -106,7 +140,7 @@ exports.create = async (req, res) => {
           RETURNING *
         `;
         const r = await client.query(q, [
-          id, societyId, flat_number, wing, recipient_name, delivery_company,
+          id, societyId, finalFlat, finalWing, recipient_name, delivery_company,
           tracking_number, parseInt(parcel_count) || 1, pickup_pin, photo_url, notes,
           req.user.id, now
         ]);
@@ -117,12 +151,12 @@ exports.create = async (req, res) => {
             INSERT INTO platform.notifications (id, user_id, title, body, type, created_at)
             SELECT $1, id, $2, $3, 'PARCEL', NOW()
             FROM platform.users
-            WHERE society_id = $4 AND flat_number = $5 AND wing = $6
+            WHERE society_id = $4 AND (flat_number = $5 OR flat_number = $6)
           `, [
             uuidv4(),
             `Package Arrived from ${delivery_company}`,
-            `A parcel has been received at the security gate for Unit ${wing ? wing + '-' : ''}${flat_number}. Your 4-Digit Pickup PIN is ${pickup_pin}.`,
-            societyId, flat_number, wing
+            `A parcel has been received at the security gate for Unit ${finalWing ? finalWing + '-' : ''}${finalFlat}. Your 4-Digit Pickup PIN is ${pickup_pin}.`,
+            societyId, finalFlat, `${finalWing}-${finalFlat}`
           ]);
         } catch (_) {}
 
@@ -137,8 +171,8 @@ exports.create = async (req, res) => {
     const newParcel = {
       id,
       society_id: societyId,
-      flat_number,
-      wing,
+      flat_number: finalFlat,
+      wing: finalWing,
       recipient_name,
       delivery_company,
       tracking_number,

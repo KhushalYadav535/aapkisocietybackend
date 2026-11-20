@@ -110,8 +110,20 @@ const requirePermission = (permissionCode) => {
     if (role === 'ADMIN' || role === 'PLATFORM_ADMIN') {
       return next();
     }
-    if ((role === 'CHECKER' || role === 'TREASURY_CHECKER' || role === 'TREASURER') && 
-        ['AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE'].includes(permissionCode)) {
+    if (['TREASURER', 'TREASURY'].includes(role) && 
+        ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'BILLING_CREATE', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'TAX_MANAGE', 'TAX_VIEW'].includes(permissionCode)) {
+      return next();
+    }
+    if (['CHECKER', 'TREASURY_CHECKER'].includes(role) && 
+        ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'COMPLIANCE_MANAGE', 'TAX_MANAGE', 'TAX_VIEW', 'NOTIFICATION_MANAGE'].includes(permissionCode)) {
+      return next();
+    }
+    if (['MAKER', 'TREASURY_MAKER'].includes(role) && 
+        ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_CREATE', 'COMPLIANCE_MANAGE'].includes(permissionCode)) {
+      return next();
+    }
+    if (['COMMITTEE', 'SECRETARY'].includes(role) && 
+        ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'SOCIETY_MANAGE', 'NOTICE_CREATE', 'VIOLATION_MANAGE', 'NOC_MANAGE', 'NOC_APPROVE'].includes(permissionCode)) {
       return next();
     }
     if (role === 'GUARD' && ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'].includes(permissionCode)) {
