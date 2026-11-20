@@ -29,5 +29,9 @@ router.post('/mfa/setup', authenticate, authController.setupMFA);
 router.post('/mfa/verify', authenticate, [
   body('otp').notEmpty().withMessage('OTP required'),
 ], validate, authController.verifyMFA);
+router.post('/email-otp/send', authenticate, authController.setupMFA);
+router.post('/email-otp/verify', authenticate, [
+  body('otp').notEmpty().withMessage('OTP required'),
+], validate, authController.verifyMFA);
 
 module.exports = router;

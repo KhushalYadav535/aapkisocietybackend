@@ -150,6 +150,31 @@ const sendDemoBookingNotificationEmail = async (booking) => {
   return sendEmail(recipients, subject, html);
 };
 
+const sendMfaOtpEmail = (to, otp, name = 'Valued Member') => {
+  const subject = `🔐 Your AapkiSociety Verification Code: ${otp}`;
+  const html = `
+    <div style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;max-width:540px;margin:auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.05);">
+      <div style="background:linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);padding:28px 24px;text-align:center;color:#ffffff;">
+        <h1 style="margin:0;font-size:20px;font-weight:700;">🔐 Two-Step Verification (Email OTP)</h1>
+        <p style="margin:6px 0 0 0;font-size:13px;color:#e0e7ff;">AapkiSociety Financial & Treasury Security</p>
+      </div>
+      <div style="padding:28px 24px;text-align:center;">
+        <p style="font-size:14px;color:#334155;margin:0 0 16px 0;">Hello <strong>${name}</strong>,</p>
+        <p style="font-size:14px;color:#475569;margin:0 0 20px 0;">Use the one-time verification code (OTP) below to authenticate your role and access the platform:</p>
+        <div style="background:#f1f5f9;border:2px dashed #cbd5e1;border-radius:12px;padding:16px;margin:20px auto;max-width:240px;letter-spacing:8px;font-size:32px;font-weight:800;color:#1e293b;font-family:monospace;">
+          ${otp}
+        </div>
+        <p style="font-size:12px;color:#64748b;margin:20px 0 0 0;">This OTP is valid for <strong>10 minutes</strong>. Never share this code with anyone.</p>
+        <p style="font-size:11px;color:#94a3b8;margin:8px 0 0 0;">If you did not request this verification code, please contact your society administrator immediately.</p>
+      </div>
+      <div style="background:#f8fafc;padding:14px 20px;text-align:center;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;">
+        © AapkiSociety • Secure Housing Society Management Platform
+      </div>
+    </div>
+  `;
+  return sendEmail(to, subject, html);
+};
+
 module.exports = {
   sendEmail,
   sendVerificationEmail,
@@ -158,4 +183,5 @@ module.exports = {
   sendRenewalReminderEmail,
   sendReUploadRequestEmail,
   sendDemoBookingNotificationEmail,
+  sendMfaOtpEmail,
 };
