@@ -315,6 +315,13 @@ exports.getPolls = (req, res) => {
 
     if (isPostgresEnabled) {
       return ensureMeetingTables(societyId).then(async () => {
+        // Auto-close expired active polls
+        await pool.query(`
+          UPDATE \"society_${societyId}\".polls
+          SET status = 'CLOSED', updated_at = NOW()
+          WHERE society_id = $1 AND status = 'ACTIVE' AND end_date IS NOT NULL AND end_date < CURRENT_DATE
+        `, [societyId]).catch(() => {});
+
         let query = `SELECT * FROM \"society_${societyId}\".polls WHERE society_id = $1`;
         const params = [societyId];
         let idx = 2;
@@ -329,6 +336,13 @@ exports.getPolls = (req, res) => {
     const db = getDb();
     let polls = db.get('polls').value() || [];
     polls = polls.filter(p => p.society_id === societyId);
+    // Auto-close in lowdb
+    polls.forEach(p => {
+      if (p.status === 'ACTIVE' && p.end_date && new Date(p.end_date) < new Date()) {
+        p.status = 'CLOSED';
+        p.updated_at = new Date().toISOString();
+      }
+    });
     if (meeting_id) polls = polls.filter(p => p.meeting_id === meeting_id);
     if (status) polls = polls.filter(p => p.status === status);
     res.json({ polls: polls.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) });

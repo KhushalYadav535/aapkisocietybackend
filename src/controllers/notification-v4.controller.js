@@ -255,6 +255,9 @@ exports.getRenewalBanner = async (req, res) => {
       banner = { type: 'warning', title: `Trial Expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}`, message: 'Subscribe now to continue using all features.', action: '/dashboard/billing' };
     } else if (daysLeft !== null && daysLeft <= 30 && daysLeft > 0) {
       banner = { type: 'info', title: `Renewal Due in ${daysLeft} days`, message: `Your ${soc.subscription_plan} plan renews on ${soc.renewal_date}.`, action: '/dashboard/billing' };
+    } else if (soc.subscription_status === 'ACTIVE') {
+      // Active subscription — do not show overdue error
+      banner = null;
     } else if (daysLeft !== null && daysLeft <= 0 && soc.subscription_status !== 'OFFBOARDED') {
       banner = { type: 'error', title: 'Subscription Overdue', message: 'Your subscription renewal is overdue. Please process payment.', action: '/dashboard/billing' };
     }

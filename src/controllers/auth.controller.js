@@ -152,6 +152,19 @@ exports.login = async (req, res) => {
 
     const token = generateToken(user);
 
+    let societyName = null;
+    if (user.society_id) {
+      try {
+        if (isPostgresEnabled && pool) {
+          const socR = await pool.query('SELECT name FROM platform.societies WHERE id = $1', [user.society_id]);
+          if (socR.rows.length > 0) societyName = socR.rows[0].name;
+        } else {
+          const soc = getDb().get('societies').find({ id: user.society_id }).value();
+          if (soc) societyName = soc.name;
+        }
+      } catch (_) {}
+    }
+
     req.user = { id: user.id, society_id: user.society_id || 'platform' };
     await logAudit(req, 'LOGIN_SUCCESS', 'USER', user.id, null, null);
 
@@ -161,6 +174,7 @@ exports.login = async (req, res) => {
       user: {
         id: user.id, email: user.email, first_name: user.first_name,
         last_name: user.last_name, role: user.role, society_id: user.society_id,
+        society_name: societyName || 'Sunrise CHS',
         flat_number: user.flat_number, wing: user.wing, phone: user.phone,
         avatar_url: user.avatar_url,
       }
@@ -339,5 +353,46 @@ exports.verifyMFA = async (req, res) => {
   } catch (error) {
     console.error('Email OTP verify error:', error);
     res.status(500).json({ error: 'Failed to verify verification code' });
+  }
+};
+
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email address is required' });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    let user;
+    if (isPostgresEnabled) {
+      const r = await pool.query('SELECT id, first_name, email FROM platform.users WHERE LOWER(email) = $1', [cleanEmail]);
+      user = r.rows[0];
+    } else {
+      const db = getDb();
+      user = db.get('users').find(u => (u.email || '').toLowerCase() === cleanEmail).value();
+    }
+
+    if (user) {
+      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+      if (isPostgresEnabled) {
+        await pool.query('UPDATE platform.users SET pending_mfa_code = $1 WHERE id = $2', [resetCode, user.id]);
+      } else {
+        const db = getDb();
+        db.get('users').find({ id: user.id }).assign({ pending_mfa_code: resetCode }).write();
+      }
+      try {
+        const { sendEmail } = require('../utils/email');
+        await sendEmail(
+          user.email,
+          'AapkiSociety - Password Reset Instructions',
+          `<p>Hello ${user.first_name || 'Member'},</p><p>We received a request to reset your password. Your reset code is <strong>${resetCode}</strong>.</p><p>If you did not request this, please ignore this email or notify your Society Admin.</p>`
+        );
+      } catch (_) {}
+    }
+
+    res.json({ success: true, message: 'If an account with that email exists, password reset instructions have been sent.' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Failed to process password reset request' });
   }
 };

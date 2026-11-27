@@ -34,8 +34,8 @@ exports.getStats = (req, res) => {
             ? client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE raised_by = $1 AND status IN ('OPEN','IN_PROGRESS')", [req.user.id])
             : client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE status IN ('OPEN','IN_PROGRESS')"),
           isResident
-            ? client.query("SELECT COUNT(*)::int AS c FROM bills WHERE member_id = $1 AND status IN ('APPROVED','PARTIALLY_PAID','OVERDUE')", [req.user.id])
-            : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status IN ('APPROVED','PARTIALLY_PAID','OVERDUE')"),
+            ? client.query("SELECT COUNT(*)::int AS c FROM bills WHERE member_id = $1 AND status NOT IN ('PAID','REJECTED','CANCELLED')", [req.user.id])
+            : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status NOT IN ('PAID','REJECTED','CANCELLED')"),
           client.query('SELECT COUNT(*)::int AS c FROM visitors WHERE DATE(check_in) = CURRENT_DATE'),
           isResident
             ? client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND member_id = $1", [req.user.id])
@@ -95,8 +95,8 @@ exports.getStats = (req, res) => {
       ? db.get('complaints').filter(c => c.society_id === sid && c.raised_by === req.user.id && ['OPEN', 'IN_PROGRESS'].includes(c.status)).size().value()
       : db.get('complaints').filter(c => c.society_id === sid && ['OPEN', 'IN_PROGRESS'].includes(c.status)).size().value();
     const pendingBills = isResident
-      ? db.get('bills').filter(b => b.society_id === sid && b.member_id === req.user.id && ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status)).size().value()
-      : db.get('bills').filter(b => b.society_id === sid && ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status)).size().value();
+      ? db.get('bills').filter(b => b.society_id === sid && b.member_id === req.user.id && !['PAID', 'REJECTED', 'CANCELLED'].includes(b.status)).size().value()
+      : db.get('bills').filter(b => b.society_id === sid && !['PAID', 'REJECTED', 'CANCELLED'].includes(b.status)).size().value();
     const today = new Date().toISOString().split('T')[0];
     const todayVisitors = db.get('visitors').filter(v => v.society_id === sid && v.check_in && v.check_in.startsWith(today)).size().value();
     const parcelsAtGate = (db.get('parcels').value() || []).filter(p => p.society_id === sid && p.status === 'AT_GATE').length;

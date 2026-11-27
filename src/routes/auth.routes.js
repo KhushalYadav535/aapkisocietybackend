@@ -19,6 +19,10 @@ router.post('/login', [
   body('password').notEmpty().withMessage('Password required'),
 ], validate, authController.login);
 
+router.post('/forgot-password', [
+  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+], validate, authController.forgotPassword);
+
 router.get('/me', authenticate, authController.getProfile);
 router.put('/me', authenticate, authController.updateProfile);
 router.put('/change-password', authenticate, [

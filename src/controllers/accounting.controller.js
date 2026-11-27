@@ -110,6 +110,94 @@ const generateVoucherNumber = (type) => {
   return `${prefix}-${fy}-${Date.now().toString(36).toUpperCase()}`;
 };
 
+// ─── Auto-sync billing & payments to accounting double-entry ─────────────────
+const syncBillingToAccounting = async (client, societyId) => {
+  if (!societyId) return;
+  try {
+    await ensureAccountingTables(client);
+    await seedDefaultCOA(client);
+
+    const accR = await client.query("SELECT id, code FROM ledger_accounts WHERE code IN ('1001', '1002', '1003', '4001')");
+    const accMap = {};
+    accR.rows.forEach(r => { accMap[r.code] = r.id; });
+    const bankAccId = accMap['1002'] || accMap['1001'];
+    const arAccId = accMap['1003'];
+    const incomeAccId = accMap['4001'];
+
+    if (!arAccId || !incomeAccId) return;
+
+    // 1. Sync bills that do not have vouchers yet
+    const billsR = await client.query(`
+      SELECT b.* FROM bills b
+      WHERE b.society_id = $1 AND b.status NOT IN ('REJECTED', 'CANCELLED')
+        AND NOT EXISTS (SELECT 1 FROM vouchers v WHERE v.narration LIKE '%' || b.bill_number || '%')
+    `, [societyId]);
+
+    for (const b of billsR.rows) {
+      const vId = uuidv4();
+      const vNum = `VOU-JNL-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`;
+      const vDate = b.bill_date ? String(b.bill_date).split('T')[0] : new Date().toISOString().split('T')[0];
+      const amt = parseFloat(b.total_amount || 0);
+      if (amt <= 0) continue;
+      const narr = `Bill ${b.bill_number} for period ${b.billing_period || 'N/A'}`;
+
+      await client.query(`
+        INSERT INTO vouchers (id, voucher_number, voucher_type, amount, narration, status, maker_id, checker_id, fiscal_year, voucher_date, society_id)
+        VALUES ($1, $2, 'JOURNAL', $3, $4, 'APPROVED', $5, $5, $6, $7, $8)
+        ON CONFLICT DO NOTHING
+      `, [vId, vNum, amt, narr, b.created_by || 'system', currentFiscalYear(), vDate, societyId]);
+
+      // Debit Accounts Receivable
+      await client.query(`
+        INSERT INTO ledger_entries (id, voucher_id, account_id, entry_type, amount, narration, entry_date, society_id)
+        VALUES ($1, $2, $3, 'DEBIT', $4, $5, $6, $7)
+      `, [uuidv4(), vId, arAccId, amt, narr, vDate, societyId]);
+
+      // Credit Maintenance Income
+      await client.query(`
+        INSERT INTO ledger_entries (id, voucher_id, account_id, entry_type, amount, narration, entry_date, society_id)
+        VALUES ($1, $2, $3, 'CREDIT', $4, $5, $6, $7)
+      `, [uuidv4(), vId, incomeAccId, amt, narr, vDate, societyId]);
+    }
+
+    // 2. Sync successful payments that do not have vouchers yet
+    const payR = await client.query(`
+      SELECT p.* FROM payments p
+      WHERE p.society_id = $1 AND p.status = 'SUCCESS'
+        AND NOT EXISTS (SELECT 1 FROM vouchers v WHERE v.narration LIKE '%' || p.id || '%')
+    `, [societyId]);
+
+    for (const p of payR.rows) {
+      const vId = uuidv4();
+      const vNum = `VOU-REC-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`;
+      const vDate = p.payment_date ? String(p.payment_date).split('T')[0] : new Date().toISOString().split('T')[0];
+      const amt = parseFloat(p.amount || 0);
+      if (amt <= 0) continue;
+      const narr = `Payment received ${p.id} via ${p.payment_method || 'UPI'}`;
+
+      await client.query(`
+        INSERT INTO vouchers (id, voucher_number, voucher_type, amount, narration, status, maker_id, checker_id, fiscal_year, voucher_date, society_id)
+        VALUES ($1, $2, 'RECEIPT', $3, $4, 'APPROVED', $5, $5, $6, $7, $8)
+        ON CONFLICT DO NOTHING
+      `, [vId, vNum, amt, narr, p.member_id || 'system', currentFiscalYear(), vDate, societyId]);
+
+      // Debit Bank/Cash
+      await client.query(`
+        INSERT INTO ledger_entries (id, voucher_id, account_id, entry_type, amount, narration, entry_date, society_id)
+        VALUES ($1, $2, $3, 'DEBIT', $4, $5, $6, $7)
+      `, [uuidv4(), vId, bankAccId, amt, narr, vDate, societyId]);
+
+      // Credit Accounts Receivable
+      await client.query(`
+        INSERT INTO ledger_entries (id, voucher_id, account_id, entry_type, amount, narration, entry_date, society_id)
+        VALUES ($1, $2, $3, 'CREDIT', $4, $5, $6, $7)
+      `, [uuidv4(), vId, arAccId, amt, narr, vDate, societyId]);
+    }
+  } catch (err) {
+    console.error('syncBillingToAccounting error:', err);
+  }
+};
+
 // ─── Controllers ──────────────────────────────────────────────────────────────
 
 // GET /api/accounting/accounts
@@ -169,6 +257,7 @@ exports.getVouchers = async (req, res) => {
     if (isPostgresEnabled && societyId) {
       return withTenant(societyId, async (client) => {
         await ensureAccountingTables(client);
+        await syncBillingToAccounting(client, societyId);
         let q = 'SELECT * FROM vouchers WHERE 1=1';
         const params = [];
         let idx = 1;
@@ -364,6 +453,7 @@ exports.getTrialBalance = async (req, res) => {
       return withTenant(req.user.society_id, async (client) => {
         await ensureAccountingTables(client);
         await seedDefaultCOA(client);
+        await syncBillingToAccounting(client, req.user.society_id);
         const { from, to } = req.query;
 
         let dateFilter = '';
@@ -404,6 +494,7 @@ exports.getLedger = async (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureAccountingTables(client);
+        await syncBillingToAccounting(client, req.user.society_id);
         const { from, to, page = 1, limit = 50 } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
 

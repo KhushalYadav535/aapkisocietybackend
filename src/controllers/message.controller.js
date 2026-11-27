@@ -1,11 +1,12 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/database');
-const { pool, isPostgresEnabled, ensurePlatformSchema } = require('../config/postgres');
+const { pool, isPostgresEnabled, getTenantSchemaName } = require('../config/postgres');
 
 const ensureMessageTables = async (societyId) => {
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS \"society_${societyId}\"`);
+  const schema = getTenantSchemaName(societyId);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS \"society_${societyId}\".messages (
+    CREATE TABLE IF NOT EXISTS "${schema}".messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT,
       sender_id TEXT,
@@ -22,26 +23,31 @@ exports.getConversations = (req, res) => {
     const userId = req.user.id;
     const societyId = req.user.society_id;
 
-    if (isPostgresEnabled) {
+    if (isPostgresEnabled && societyId) {
+      const schema = getTenantSchemaName(societyId);
       return ensureMessageTables(societyId).then(async () => {
         const r = await pool.query(`
           SELECT DISTINCT ON (c.conversation_id)
             c.*,
+            CASE WHEN c.sender_id = $1 THEN c.receiver_id ELSE c.sender_id END as other_id,
             CASE WHEN c.sender_id = $1 THEN r.first_name ELSE s.first_name END as other_name,
             CASE WHEN c.sender_id = $1 THEN r.last_name ELSE s.last_name END as other_last_name,
             CASE WHEN c.sender_id = $1 THEN r.flat_number ELSE s.flat_number END as other_flat,
             CASE WHEN c.sender_id = $1 THEN r.wing ELSE s.wing END as other_wing
-          FROM \"society_${societyId}\".messages c
+          FROM "${schema}".messages c
           JOIN platform.users s ON s.id = c.sender_id
           JOIN platform.users r ON r.id = c.receiver_id
           WHERE c.conversation_id IN (
-            SELECT conversation_id FROM \"society_${societyId}\".messages
+            SELECT conversation_id FROM "${schema}".messages
             WHERE sender_id = $1 OR receiver_id = $1
           )
           ORDER BY c.conversation_id, c.created_at DESC
         `, [userId]);
         return res.json({ conversations: r.rows });
-      }).catch(() => res.status(500).json({ error: 'Failed to fetch conversations' }));
+      }).catch((err) => {
+        console.error('getConversations error:', err);
+        return res.status(500).json({ error: 'Failed to fetch conversations' });
+      });
     }
 
     const db = getDb();
@@ -56,6 +62,7 @@ exports.getConversations = (req, res) => {
         const other = users.find(u => u.id === otherId);
         convMap[m.conversation_id] = {
           conversation_id: m.conversation_id,
+          other_id: otherId,
           last_message: m.content,
           last_message_at: m.created_at,
           unread_count: 0,
@@ -84,28 +91,34 @@ exports.getMessages = (req, res) => {
     const { limit = 50, offset = 0 } = req.query;
     const societyId = req.user.society_id;
 
-    if (isPostgresEnabled) {
+    if (isPostgresEnabled && societyId) {
+      const schema = getTenantSchemaName(societyId);
+      const altConvId1 = conversationId.includes('__') ? conversationId.replace('__', '-') : conversationId.replace('-', '__');
       return ensureMessageTables(societyId).then(async () => {
         const r = await pool.query(`
           SELECT m.*, s.first_name as sender_name, s.last_name as sender_last_name, s.flat_number as sender_flat, s.wing as sender_wing
-          FROM \"society_${societyId}\".messages m
+          FROM "${schema}".messages m
           JOIN platform.users s ON s.id = m.sender_id
-          WHERE m.conversation_id = $1
+          WHERE m.conversation_id = $1 OR m.conversation_id = $2
           ORDER BY m.created_at DESC
-          LIMIT $2 OFFSET $3
-        `, [conversationId, limit, offset]);
+          LIMIT $3 OFFSET $4
+        `, [conversationId, altConvId1, limit, offset]);
 
         await pool.query(`
-          UPDATE \"society_${societyId}\".messages SET read_at = NOW()
-          WHERE conversation_id = $1 AND receiver_id = $2 AND read_at IS NULL
-        `, [conversationId, userId]);
+          UPDATE "${schema}".messages SET read_at = NOW()
+          WHERE (conversation_id = $1 OR conversation_id = $2) AND receiver_id = $3 AND read_at IS NULL
+        `, [conversationId, altConvId1, userId]);
 
         return res.json({ messages: r.rows.reverse() });
-      }).catch(() => res.status(500).json({ error: 'Failed to fetch messages' }));
+      }).catch((err) => {
+        console.error('getMessages error:', err);
+        return res.status(500).json({ error: 'Failed to fetch messages' });
+      });
     }
 
     const db = getDb();
-    let messages = (db.get('messages') || []).filter(m => m.conversation_id === conversationId);
+    const altConvId1 = conversationId.includes('__') ? conversationId.replace('__', '-') : conversationId.replace('-', '__');
+    let messages = (db.get('messages') || []).filter(m => m.conversation_id === conversationId || m.conversation_id === altConvId1);
     const users = db.get('users') || [];
 
     messages = messages.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -116,7 +129,7 @@ exports.getMessages = (req, res) => {
       return { ...m, sender_name: sender?.first_name, sender_last_name: sender?.last_name, sender_flat: sender?.flat_number, sender_wing: sender?.wing };
     }).reverse();
 
-    db.get('messages').filter(m => m.conversation_id === conversationId && m.receiver_id === userId && !m.read_at)
+    db.get('messages').filter(m => (m.conversation_id === conversationId || m.conversation_id === altConvId1) && m.receiver_id === userId && !m.read_at)
       .forEach(m => { m.read_at = new Date().toISOString(); });
     db.write();
 
@@ -134,9 +147,11 @@ exports.send = (req, res) => {
     const now = new Date().toISOString();
 
     if (!content || !content.trim()) return res.status(400).json({ error: 'Message cannot be empty' });
+    if (!receiver_id) return res.status(400).json({ error: 'Recipient is required' });
     if (receiver_id === senderId) return res.status(400).json({ error: 'Cannot send message to yourself' });
 
-    const convId = [senderId, receiver_id].sort().join('-');
+    // Join with double underscore to prevent collision with UUID hyphens
+    const convId = [senderId, receiver_id].sort().join('__');
 
     const message = {
       id: uuidv4(), conversation_id: convId, sender_id: senderId, receiver_id,
@@ -144,17 +159,21 @@ exports.send = (req, res) => {
       created_at: now
     };
 
-    if (isPostgresEnabled) {
+    if (isPostgresEnabled && societyId) {
+      const schema = getTenantSchemaName(societyId);
       return ensureMessageTables(societyId).then(async () => {
         await pool.query(
-          `INSERT INTO \"society_${societyId}\".messages (id, conversation_id, sender_id, receiver_id, content, read_at, created_at)
+          `INSERT INTO "${schema}".messages (id, conversation_id, sender_id, receiver_id, content, read_at, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [message.id, message.conversation_id, message.sender_id, message.receiver_id, message.content, message.read_at, message.created_at]
         );
 
         const sender = await pool.query(`SELECT first_name, last_name, flat_number, wing FROM platform.users WHERE id = $1`, [senderId]);
         return res.status(201).json({ message: { ...message, sender_name: sender.rows[0]?.first_name, sender_last_name: sender.rows[0]?.last_name, sender_flat: sender.rows[0]?.flat_number, sender_wing: sender.rows[0]?.wing } });
-      }).catch(() => res.status(500).json({ error: 'Failed to send message' }));
+      }).catch((err) => {
+        console.error('sendMessage error:', err);
+        return res.status(500).json({ error: 'Failed to send message' });
+      });
     }
 
     const db = getDb();
@@ -173,10 +192,11 @@ exports.getUnreadCount = (req, res) => {
     const userId = req.user.id;
     const societyId = req.user.society_id;
 
-    if (isPostgresEnabled) {
+    if (isPostgresEnabled && societyId) {
+      const schema = getTenantSchemaName(societyId);
       return ensureMessageTables(societyId).then(async () => {
         const r = await pool.query(
-          `SELECT COUNT(*) as count FROM \"society_${societyId}\".messages WHERE receiver_id = $1 AND read_at IS NULL`,
+          `SELECT COUNT(*) as count FROM "${schema}".messages WHERE receiver_id = $1 AND read_at IS NULL`,
           [userId]
         );
         return res.json({ count: parseInt(r.rows[0]?.count || 0) });

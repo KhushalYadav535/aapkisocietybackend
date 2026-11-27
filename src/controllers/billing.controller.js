@@ -116,6 +116,14 @@ exports.getAllBills = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureTenantBillingTables(client);
+        // Auto-update past-due bills to OVERDUE status
+        await client.query(`
+          UPDATE bills
+          SET status = 'OVERDUE', updated_at = NOW()
+          WHERE status IN ('PENDING', 'APPROVED', 'PARTIALLY_PAID')
+            AND due_date IS NOT NULL
+            AND due_date::date < CURRENT_DATE
+        `);
         const cols = 'id,bill_number,member_id,flat_id,amount,tax_amount,total_amount,paid_amount,status,bill_type,billing_period,due_date,bill_date,description,created_by,approved_by,created_at';
         let query, countQuery, params, countParams;
         if (req.user.role === 'RESIDENT') {
@@ -138,6 +146,11 @@ exports.getAllBills = (req, res) => {
       }).catch((err) => { console.error('Billing error:', err); return res.status(500).json({ error: 'Failed to process request' }); });
     }
     const db = getDb();
+    const today = new Date().toISOString().split('T')[0];
+    db.get('bills')
+      .filter(b => ['PENDING', 'APPROVED', 'PARTIALLY_PAID'].includes(b.status) && b.due_date && b.due_date < today)
+      .each(b => { b.status = 'OVERDUE'; })
+      .write();
     let bills;
     if (req.user.role === 'RESIDENT') {
       bills = db.get('bills').filter({ member_id: req.user.id }).sortBy('created_at').reverse().value();
@@ -357,15 +370,35 @@ exports.getPayments = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureTenantBillingTables(client);
-        const cols = 'id,bill_id,member_id,amount,payment_method,payment_reference,status,payment_date,created_at';
+        const cols = `
+          p.id, p.bill_id, p.member_id, p.amount, p.payment_method, p.payment_reference, p.status, p.payment_date, p.created_at,
+          b.bill_number, b.billing_period,
+          u.flat_number, u.wing,
+          TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) as member_name
+        `;
         let query, countQuery, params, countParams;
         if (req.user.role === 'RESIDENT') {
-          query = `SELECT ${cols} FROM payments WHERE member_id = $1 ORDER BY payment_date DESC LIMIT $2 OFFSET $3`;
+          query = `
+            SELECT ${cols}
+            FROM payments p
+            LEFT JOIN bills b ON p.bill_id = b.id
+            LEFT JOIN platform.users u ON p.member_id = u.id
+            WHERE p.member_id = $1
+            ORDER BY p.payment_date DESC
+            LIMIT $2 OFFSET $3
+          `;
           countQuery = 'SELECT COUNT(*)::int AS total FROM payments WHERE member_id = $1';
           params = [req.user.id, limit, offset];
           countParams = [req.user.id];
         } else {
-          query = `SELECT ${cols} FROM payments ORDER BY payment_date DESC LIMIT $1 OFFSET $2`;
+          query = `
+            SELECT ${cols}
+            FROM payments p
+            LEFT JOIN bills b ON p.bill_id = b.id
+            LEFT JOIN platform.users u ON p.member_id = u.id
+            ORDER BY p.payment_date DESC
+            LIMIT $1 OFFSET $2
+          `;
           countQuery = 'SELECT COUNT(*)::int AS total FROM payments';
           params = [limit, offset];
           countParams = [];
@@ -385,6 +418,18 @@ exports.getPayments = (req, res) => {
     } else {
       payments = db.get('payments').filter({ society_id: req.user.society_id }).sortBy('payment_date').reverse().value();
     }
+    payments = payments.map(p => {
+      const b = p.bill_id ? db.get('bills').find({ id: p.bill_id }).value() : null;
+      const u = p.member_id ? db.get('users').find({ id: p.member_id }).value() : null;
+      return {
+        ...p,
+        bill_number: b?.bill_number || (p.bill_id ? `BIL-${p.bill_id.slice(0, 8)}` : null),
+        billing_period: b?.billing_period || null,
+        flat_number: u?.flat_number || p.flat_number || null,
+        wing: u?.wing || p.wing || null,
+        member_name: u ? `${u.first_name || ''} ${u.last_name || ''}`.trim() : null
+      };
+    });
     const total = payments.length;
     const paginated = payments.slice(offset, offset + limit);
     res.json({ payments: paginated, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
@@ -458,10 +503,19 @@ exports.getBillingSummary = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         await ensureTenantBillingTables(client);
+        // Auto-update past-due bills to OVERDUE status
+        await client.query(`
+          UPDATE bills
+          SET status = 'OVERDUE', updated_at = NOW()
+          WHERE status IN ('PENDING', 'APPROVED', 'PARTIALLY_PAID')
+            AND due_date IS NOT NULL
+            AND due_date::date < CURRENT_DATE
+        `);
+
         const isResident = req.user.role === 'RESIDENT';
         const billsQuery = isResident
-          ? "SELECT COALESCE(SUM(CASE WHEN status IN ('APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE') THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills WHERE member_id = $1"
-          : "SELECT COALESCE(SUM(CASE WHEN status IN ('APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE') THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status IN ('APPROVED', 'PARTIALLY_PAID', 'OVERDUE') AND due_date < CURRENT_DATE THEN 1 END) AS overdue_bills FROM bills";
+          ? "SELECT COALESCE(SUM(CASE WHEN status NOT IN ('REJECTED', 'CANCELLED') THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED', 'CANCELLED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'REJECTED', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date < CURRENT_DATE) THEN 1 END) AS overdue_bills FROM bills WHERE member_id = $1"
+          : "SELECT COALESCE(SUM(CASE WHEN status NOT IN ('REJECTED', 'CANCELLED') THEN total_amount ELSE 0 END), 0) AS total_billed, COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED', 'CANCELLED') THEN 1 END) AS pending_bills, COUNT(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'REJECTED', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date < CURRENT_DATE) THEN 1 END) AS overdue_bills FROM bills";
 
         const paymentsQuery = isResident
           ? "SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS' AND member_id = $1"
@@ -481,7 +535,7 @@ exports.getBillingSummary = (req, res) => {
           summary: {
             total_billed: totalBilled,
             total_collected: totalCollected,
-            outstanding: totalBilled - totalCollected,
+            outstanding: Math.max(0, totalBilled - totalCollected),
             pending_bills: pendingBills,
             overdue_bills: overdueBills,
             collection_rate: totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : 0
@@ -502,17 +556,22 @@ exports.getBillingSummary = (req, res) => {
       ? db.get('payments').filter({ society_id: sid, status: 'SUCCESS', member_id: req.user.id }).value()
       : db.get('payments').filter({ society_id: sid, status: 'SUCCESS' }).value();
 
-    const activeStatuses = ['APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE'];
-    const totalBilled = bills.filter(b => activeStatuses.includes(b.status)).reduce((sum, b) => sum + (b.total_amount || 0), 0);
+    const today = new Date().toISOString().split('T')[0];
+    db.get('bills')
+      .filter(b => ['PENDING', 'APPROVED', 'PARTIALLY_PAID'].includes(b.status) && b.due_date && b.due_date < today)
+      .each(b => { b.status = 'OVERDUE'; })
+      .write();
+
+    const activeBills = bills.filter(b => !['REJECTED', 'CANCELLED'].includes(b.status));
+    const totalBilled = activeBills.reduce((sum, b) => sum + (b.total_amount || 0), 0);
     const totalCollected = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-    const pendingBills = bills.filter(b => ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status)).length;
-    const now = new Date().toISOString().split('T')[0];
-    const overdueBills = bills.filter(b => ['APPROVED', 'PARTIALLY_PAID', 'OVERDUE'].includes(b.status) && b.due_date && b.due_date < now).length;
+    const pendingBills = bills.filter(b => !['PAID', 'REJECTED', 'CANCELLED'].includes(b.status)).length;
+    const overdueBills = bills.filter(b => b.status === 'OVERDUE' || (!['PAID', 'REJECTED', 'CANCELLED'].includes(b.status) && b.due_date && b.due_date < today)).length;
 
     res.json({
       summary: {
         total_billed: totalBilled, total_collected: totalCollected,
-        outstanding: totalBilled - totalCollected, pending_bills: pendingBills,
+        outstanding: Math.max(0, totalBilled - totalCollected), pending_bills: pendingBills,
         overdue_bills: overdueBills,
         collection_rate: totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : 0
       }
@@ -554,7 +613,36 @@ const ensureDunningTables = async (client) => {
 
 exports.getArrearsAging = (req, res) => {
   if (!isPostgresEnabled || !req.user.society_id) {
-    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+    const db = getDb();
+    const sid = req.user?.society_id;
+    const bills = db.get('bills').filter(b => b.society_id === sid && !['PAID', 'REJECTED', 'CANCELLED'].includes(b.status)).value() || [];
+    const today = new Date().toISOString().split('T')[0];
+    const buckets = [
+      { label: '0-30 days', days_from: 0, days_to: 30 },
+      { label: '31-60 days', days_from: 31, days_to: 60 },
+      { label: '61-90 days', days_from: 61, days_to: 90 },
+      { label: '91-180 days', days_from: 91, days_to: 180 },
+      { label: '180+ days', days_from: 181, days_to: null },
+    ];
+    const result = buckets.map(b => {
+      const matchBills = bills.filter(bill => {
+        if (!bill.due_date || bill.due_date >= today) return false;
+        const diffDays = Math.floor((new Date(today).getTime() - new Date(bill.due_date).getTime()) / (1000 * 3600 * 24));
+        const outstanding = (bill.total_amount || 0) - (bill.paid_amount || 0);
+        if (outstanding <= 0) return false;
+        if (b.days_to === null) return diffDays >= b.days_from;
+        return diffDays >= b.days_from && diffDays <= b.days_to;
+      });
+      return {
+        label: b.label,
+        days_from: b.days_from,
+        days_to: b.days_to,
+        total_amount: matchBills.reduce((s, bill) => s + ((bill.total_amount || 0) - (bill.paid_amount || 0)), 0),
+        bill_count: matchBills.length,
+        oldest_date: matchBills.map(b => b.bill_date).sort()[0] || null,
+      };
+    });
+    return res.json({ buckets: result, generated_at: new Date().toISOString() });
   }
   return withTenant(req.user.society_id, async (client) => {
     await ensureTenantBillingTables(client);
@@ -572,10 +660,11 @@ exports.getArrearsAging = (req, res) => {
                COUNT(*) AS bill_count,
                MIN(bill_date) AS oldest_date
         FROM bills
-        WHERE status NOT IN ('PAID', 'REJECTED')
-          AND due_date < CURRENT_DATE
+        WHERE status NOT IN ('PAID', 'REJECTED', 'CANCELLED')
+          AND due_date IS NOT NULL
+          AND due_date::date < CURRENT_DATE
           AND (total_amount - COALESCE(paid_amount, 0)) > 0
-          AND CURRENT_DATE - due_date BETWEEN $1 AND $2
+          AND (CURRENT_DATE - due_date::date) >= $1 AND (CURRENT_DATE - due_date::date) <= $2
       `, [b.days_from, b.days_to]);
       result.push({
         label: b.label,
@@ -592,26 +681,61 @@ exports.getArrearsAging = (req, res) => {
 
 exports.getDefaultersList = (req, res) => {
   if (!isPostgresEnabled || !req.user.society_id) {
-    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+    const db = getDb();
+    const sid = req.user?.society_id;
+    const bills = db.get('bills').filter(b => b.society_id === sid && !['PAID', 'REJECTED', 'CANCELLED'].includes(b.status)).value() || [];
+    const users = db.get('users').value() || [];
+    const today = new Date().toISOString().split('T')[0];
+    const memberMap = {};
+    bills.forEach(b => {
+      const outstanding = (b.total_amount || 0) - (b.paid_amount || 0);
+      if (outstanding <= 0) return;
+      if (!memberMap[b.member_id]) {
+        const u = users.find(x => x.id === b.member_id);
+        const name = u ? `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Unknown' : 'Unknown';
+        memberMap[b.member_id] = {
+          member_id: b.member_id,
+          member_name: name,
+          flat_number: u?.flat_number || 'N/A',
+          wing: u?.wing || 'N/A',
+          total_outstanding: 0,
+          oldest_bill_date: b.bill_date,
+          days_overdue: 0,
+          bill_count: 0
+        };
+      }
+      memberMap[b.member_id].total_outstanding += outstanding;
+      memberMap[b.member_id].bill_count += 1;
+      if (b.bill_date && (!memberMap[b.member_id].oldest_bill_date || b.bill_date < memberMap[b.member_id].oldest_bill_date)) {
+        memberMap[b.member_id].oldest_bill_date = b.bill_date;
+      }
+      if (b.due_date && b.due_date < today) {
+        const diff = Math.floor((new Date(today).getTime() - new Date(b.due_date).getTime()) / (1000 * 3600 * 24));
+        if (diff > memberMap[b.member_id].days_overdue) {
+          memberMap[b.member_id].days_overdue = diff;
+        }
+      }
+    });
+    return res.json({ defaulters: Object.values(memberMap).sort((a, b) => b.total_outstanding - a.total_outstanding) });
   }
   return withTenant(req.user.society_id, async (client) => {
     await ensureTenantBillingTables(client);
     const r = await client.query(`
       SELECT
         b.member_id,
-        COALESCE(u.name, 'Unknown') AS member_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''), 'Unknown') AS member_name,
         COALESCE(u.flat_number, 'N/A') AS flat_number,
         COALESCE(u.wing, 'N/A') AS wing,
         SUM(b.total_amount - COALESCE(b.paid_amount, 0)) AS total_outstanding,
         MIN(b.bill_date) AS oldest_bill_date,
-        MAX(CURRENT_DATE - b.due_date) AS days_overdue,
+        MAX(CASE WHEN b.due_date IS NOT NULL AND b.due_date::date < CURRENT_DATE THEN (CURRENT_DATE - b.due_date::date) ELSE 0 END) AS days_overdue,
         COUNT(b.id) AS bill_count
       FROM bills b
       LEFT JOIN platform.users u ON b.member_id = u.id
       WHERE b.society_id = $1
-        AND b.status NOT IN ('PAID', 'REJECTED')
+        AND b.status NOT IN ('PAID', 'REJECTED', 'CANCELLED')
         AND (b.total_amount - COALESCE(b.paid_amount, 0)) > 0
-      GROUP BY b.member_id, u.name, u.flat_number, u.wing
+      GROUP BY b.member_id, u.first_name, u.last_name, u.flat_number, u.wing
       ORDER BY total_outstanding DESC
     `, [req.user.society_id]);
     return res.json({
@@ -631,7 +755,9 @@ exports.getDefaultersList = (req, res) => {
 
 exports.getDunningHistory = (req, res) => {
   if (!isPostgresEnabled || !req.user.society_id) {
-    return res.status(400).json({ error: 'PostgreSQL not enabled or society not identified' });
+    const db = getDb();
+    const history = db.get('dunning_history')?.filter({ society_id: req.user.society_id }).value() || [];
+    return res.json({ records: history });
   }
   return withTenant(req.user.society_id, async (client) => {
     await ensureDunningTables(client);
@@ -639,7 +765,7 @@ exports.getDunningHistory = (req, res) => {
       SELECT
         dh.id, dh.member_id, dh.bill_id, dh.reminder_date,
         dh.reminder_type, dh.status, dh.created_at,
-        COALESCE(u.name, 'Unknown') AS member_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''), 'Unknown') AS member_name,
         b.bill_number, b.total_amount, b.due_date
       FROM dunning_history dh
       LEFT JOIN platform.users u ON dh.member_id = u.id
@@ -1295,7 +1421,7 @@ exports.generateBillPDF = (req, res) => {
       return withTenant(req.user.society_id, async (client) => {
         // Get bill with member details
         const { rows: billRows } = await client.query(`
-          SELECT b.*, u.name as member_name, u.flat_number, u.wing, u.email as member_email, u.phone as member_phone
+          SELECT b.*, TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) as member_name, u.flat_number, u.wing, u.email as member_email, u.phone as member_phone
           FROM bills b
           LEFT JOIN platform.users u ON b.member_id = u.id
           WHERE b.id = $1 AND b.society_id = $2
@@ -1435,7 +1561,7 @@ exports.exportBillsExcel = (req, res) => {
         let query = `
           SELECT b.bill_number, b.bill_date, b.due_date, b.billing_period, b.bill_type,
                  b.total_amount, b.paid_amount, b.total_amount - COALESCE(b.paid_amount, 0) as outstanding,
-                 b.status, u.name as member_name, u.flat_number, u.wing
+                 b.status, TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) as member_name, u.flat_number, u.wing
           FROM bills b
           LEFT JOIN platform.users u ON b.member_id = u.id
           WHERE b.society_id = $1
@@ -1504,7 +1630,7 @@ exports.exportArrearsExcel = (req, res) => {
     if (isPostgresEnabled && req.user.society_id) {
       return withTenant(req.user.society_id, async (client) => {
         let query = `
-          SELECT b.member_id, u.name as member_name, u.flat_number, u.wing, u.email, u.phone,
+          SELECT b.member_id, TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) as member_name, u.flat_number, u.wing, u.email, u.phone,
                  COUNT(b.id) as bill_count,
                  SUM(b.total_amount) as total_billed,
                  SUM(COALESCE(b.paid_amount, 0)) as total_paid,
@@ -1522,7 +1648,7 @@ exports.exportArrearsExcel = (req, res) => {
         if (from_date) { query += ` AND b.bill_date >= $${idx++}`; params.push(from_date); }
         if (to_date) { query += ` AND b.bill_date <= $${idx++}`; params.push(to_date); }
 
-        query += ' GROUP BY b.member_id, u.name, u.flat_number, u.wing, u.email, u.phone ORDER BY total_outstanding DESC';
+        query += ' GROUP BY b.member_id, u.first_name, u.last_name, u.flat_number, u.wing, u.email, u.phone ORDER BY total_outstanding DESC';
 
         const { rows } = await client.query(query, params);
 
@@ -1570,7 +1696,7 @@ exports.exportBillsPDFReport = (req, res) => {
         let query = `
           SELECT b.bill_number, b.bill_date, b.due_date, b.total_amount, b.paid_amount,
                  b.total_amount - COALESCE(b.paid_amount, 0) as outstanding, b.status,
-                 u.name as member_name, u.flat_number, u.wing
+                 TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) as member_name, u.flat_number, u.wing
           FROM bills b
           LEFT JOIN platform.users u ON b.member_id = u.id
           WHERE b.society_id = $1
