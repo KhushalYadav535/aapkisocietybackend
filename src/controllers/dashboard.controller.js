@@ -332,16 +332,20 @@ exports.getDashboardOverview = (req, res) => {
               ? client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE raised_by = $1 AND status IN ('OPEN','IN_PROGRESS')", [userId])
               : client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE status IN ('OPEN','IN_PROGRESS')"),
             isResident
-              ? client.query("SELECT COUNT(*)::int AS c FROM bills WHERE member_id = $1 AND status NOT IN ('PAID','REJECTED')", [userId])
-              : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status NOT IN ('PAID','REJECTED')"),
-            client.query('SELECT COUNT(*)::int AS c FROM visitors WHERE DATE(check_in) = CURRENT_DATE'),
+              ? client.query(`SELECT COUNT(*)::int AS c FROM bills 
+                              WHERE status NOT IN ('PAID','REJECTED','CANCELLED')
+                                AND (member_id = $1 OR flat_id = $2 OR (flat_id IS NOT NULL AND $3 <> '' AND flat_id = $3) OR (flat_id IS NOT NULL AND flat_id IN (SELECT id FROM platform.flats WHERE flat_number = $3 AND society_id = $4)) OR ($3 <> '' AND bill_number LIKE '%' || $3))`,
+                              [userId, req.user.flat_id || '', req.user.flat_number || '', societyId])
+              : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status NOT IN ('PAID','REJECTED','CANCELLED')"),
+            client.query("SELECT COUNT(*)::int AS c FROM visitors WHERE (status = 'CHECKED_IN' AND check_out IS NULL) OR DATE(check_in) = CURRENT_DATE"),
             isResident
               ? client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND member_id = $1", [userId])
               : client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS'"),
             client.query('SELECT COUNT(*)::int AS c FROM notices WHERE is_published = 1'),
             isResident
               ? client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND member_id = $1 AND date_trunc('month', payment_date) = date_trunc('month', NOW())", [userId])
-              : client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND date_trunc('month', payment_date) = date_trunc('month', NOW())")
+              : client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND date_trunc('month', payment_date) = date_trunc('month', NOW())"),
+            client.query("SELECT COUNT(*)::int AS c FROM parcels WHERE status = 'AT_GATE'").catch(() => ({ rows: [{ c: 0 }] }))
           ]),
           // Recent activities (limit 10)
           Promise.all([
@@ -403,7 +407,7 @@ exports.getDashboardOverview = (req, res) => {
             : client.query('SELECT status, COUNT(*)::int AS c FROM complaints GROUP BY status')
         ]);
 
-        const [usersR, flatsR, complaintsR, billsR, visitorsR, paymentsR, noticesR, monthlyPaymentsR] = statsR;
+        const [usersR, flatsR, complaintsR, billsR, visitorsR, paymentsR, noticesR, monthlyPaymentsR, parcelsR] = statsR;
         const [cR, pR, nR] = activitiesR;
         const collectionSummary = collectionR;
         const complaintStats = complaintR;
@@ -427,6 +431,7 @@ exports.getDashboardOverview = (req, res) => {
             total_collection: Number(paymentsR.rows[0]?.s || 0),
             monthly_collection: Number(monthlyPaymentsR.rows[0]?.s || 0),
             active_notices: noticesR.rows[0]?.c || 0,
+            parcels_at_gate: Number(parcelsR?.rows?.[0]?.c || 0),
           },
           activities,
           collection_summary: collectionSummary,

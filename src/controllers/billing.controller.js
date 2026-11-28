@@ -127,10 +127,21 @@ exports.getAllBills = (req, res) => {
         const cols = 'id,bill_number,member_id,flat_id,amount,tax_amount,total_amount,paid_amount,status,bill_type,billing_period,due_date,bill_date,description,created_by,approved_by,created_at';
         let query, countQuery, params, countParams;
         if (req.user.role === 'RESIDENT') {
-          query = `SELECT ${cols} FROM bills WHERE member_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`;
-          countQuery = 'SELECT COUNT(*)::int AS total FROM bills WHERE member_id = $1';
-          params = [req.user.id, limit, offset];
-          countParams = [req.user.id];
+          query = `SELECT ${cols} FROM bills 
+                   WHERE member_id = $1 
+                      OR flat_id = $2 
+                      OR (flat_id IS NOT NULL AND $3 <> '' AND flat_id = $3)
+                      OR (flat_id IS NOT NULL AND flat_id IN (SELECT id FROM platform.flats WHERE flat_number = $3 AND society_id = $4))
+                      OR ($3 <> '' AND bill_number LIKE '%' || $3)
+                   ORDER BY created_at DESC, id DESC LIMIT $5 OFFSET $6`;
+          countQuery = `SELECT COUNT(*)::int AS total FROM bills 
+                        WHERE member_id = $1 
+                           OR flat_id = $2 
+                           OR (flat_id IS NOT NULL AND $3 <> '' AND flat_id = $3)
+                           OR (flat_id IS NOT NULL AND flat_id IN (SELECT id FROM platform.flats WHERE flat_number = $3 AND society_id = $4))
+                           OR ($3 <> '' AND bill_number LIKE '%' || $3)`;
+          params = [req.user.id, req.user.flat_id || '', req.user.flat_number || '', req.user.society_id || '', limit, offset];
+          countParams = [req.user.id, req.user.flat_id || '', req.user.flat_number || '', req.user.society_id || ''];
         } else {
           query = `SELECT ${cols} FROM bills ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2`;
           countQuery = 'SELECT COUNT(*)::int AS total FROM bills';
@@ -513,27 +524,27 @@ exports.getBillingSummary = (req, res) => {
         `);
 
         const isResident = req.user.role === 'RESIDENT';
-        const billsQuery = isResident
-          ? `SELECT 
-              COALESCE(SUM(total_amount), 0) AS total_billed, 
-              COUNT(CASE WHEN status NOT IN ('PAID', 'CANCELLED') THEN 1 END) AS pending_bills, 
-              COUNT(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date <= CURRENT_DATE) THEN 1 END) AS overdue_bills,
-              COALESCE(SUM(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date <= CURRENT_DATE) THEN (total_amount - COALESCE(paid_amount, 0)) ELSE 0 END), 0) AS overdue_amount
-             FROM bills WHERE member_id = $1`
-          : `SELECT 
-              COALESCE(SUM(total_amount), 0) AS total_billed, 
-              COUNT(CASE WHEN status NOT IN ('PAID', 'CANCELLED') THEN 1 END) AS pending_bills, 
-              COUNT(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date <= CURRENT_DATE) THEN 1 END) AS overdue_bills,
-              COALESCE(SUM(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date <= CURRENT_DATE) THEN (total_amount - COALESCE(paid_amount, 0)) ELSE 0 END), 0) AS overdue_amount
-             FROM bills`;
+        const residentFilter = isResident
+          ? `(member_id = $1 OR flat_id = $2 OR (flat_id IS NOT NULL AND $3 <> '' AND flat_id = $3) OR (flat_id IS NOT NULL AND flat_id IN (SELECT id FROM platform.flats WHERE flat_number = $3 AND society_id = $4)) OR ($3 <> '' AND bill_number LIKE '%' || $3))`
+          : '1=1';
+        const residentParams = isResident
+          ? [req.user.id, req.user.flat_id || '', req.user.flat_number || '', req.user.society_id || '']
+          : [];
+
+        const billsQuery = `SELECT 
+            COALESCE(SUM(total_amount), 0) AS total_billed, 
+            COUNT(CASE WHEN status NOT IN ('PAID', 'REJECTED', 'CANCELLED') THEN 1 END) AS pending_bills, 
+            COUNT(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'REJECTED', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date <= CURRENT_DATE) THEN 1 END) AS overdue_bills,
+            COALESCE(SUM(CASE WHEN status = 'OVERDUE' OR (status NOT IN ('PAID', 'REJECTED', 'CANCELLED') AND due_date IS NOT NULL AND due_date::date <= CURRENT_DATE) THEN (total_amount - COALESCE(paid_amount, 0)) ELSE 0 END), 0) AS overdue_amount
+          FROM bills WHERE ${residentFilter}`;
 
         const paymentsQuery = isResident
-          ? "SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS' AND member_id = $1"
+          ? `SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS' AND (member_id = $1 OR bill_id IN (SELECT id FROM bills WHERE ${residentFilter}))`
           : "SELECT COALESCE(SUM(amount), 0) AS total_collected FROM payments WHERE status = 'SUCCESS'";
 
         const [billsR, paymentsR] = await Promise.all([
-          client.query(billsQuery, isResident ? [req.user.id] : []),
-          client.query(paymentsQuery, isResident ? [req.user.id] : [])
+          client.query(billsQuery, residentParams),
+          client.query(paymentsQuery, residentParams)
         ]);
 
         const totalBilled = Number(billsR.rows[0].total_billed);
@@ -661,15 +672,15 @@ exports.getArrearsAging = (req, res) => {
     const r = await client.query(`
       SELECT
         id, bill_number, bill_date, due_date, total_amount, paid_amount, status,
-        (total_amount - COALESCE(paid_amount, 0)) AS outstanding,
+        (COALESCE(total_amount::numeric, 0) - COALESCE(paid_amount::numeric, 0)) AS outstanding,
         CASE
-          WHEN due_date IS NOT NULL AND due_date::date <= CURRENT_DATE
-          THEN GREATEST(1, (CURRENT_DATE - due_date::date))
+          WHEN due_date IS NOT NULL AND NULLIF(due_date::text, '') IS NOT NULL AND NULLIF(due_date::text, '')::date <= CURRENT_DATE
+          THEN GREATEST(1, (CURRENT_DATE - NULLIF(due_date::text, '')::date))
           ELSE 0
         END AS days_overdue
       FROM bills
       WHERE status NOT IN ('PAID', 'REJECTED', 'CANCELLED')
-        AND (total_amount - COALESCE(paid_amount, 0)) > 0
+        AND (COALESCE(total_amount::numeric, 0) - COALESCE(paid_amount::numeric, 0)) > 0
     `);
 
     const bucketsDef = [

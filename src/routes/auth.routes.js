@@ -7,7 +7,7 @@ const authController = require('../controllers/auth.controller');
 const router = express.Router();
 
 router.post('/register', [
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('email').isEmail().normalizeEmail({ gmail_remove_subaddress: false, outlookdotcom_remove_subaddress: false, yahoo_remove_subaddress: false, icloud_remove_subaddress: false }).withMessage('Valid email required'),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
   body('first_name').trim().notEmpty().withMessage('First name required'),
   body('last_name').trim().notEmpty().withMessage('Last name required'),
@@ -15,12 +15,12 @@ router.post('/register', [
 ], validate, authController.register);
 
 router.post('/login', [
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('email').isEmail().normalizeEmail({ gmail_remove_subaddress: false, outlookdotcom_remove_subaddress: false, yahoo_remove_subaddress: false, icloud_remove_subaddress: false }).withMessage('Valid email required'),
   body('password').notEmpty().withMessage('Password required'),
 ], validate, authController.login);
 
 router.post('/forgot-password', [
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('email').isEmail().normalizeEmail({ gmail_remove_subaddress: false, outlookdotcom_remove_subaddress: false, yahoo_remove_subaddress: false, icloud_remove_subaddress: false }).withMessage('Valid email required'),
 ], validate, authController.forgotPassword);
 
 router.get('/me', authenticate, authController.getProfile);

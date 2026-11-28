@@ -11,7 +11,7 @@ const getActivePermissions = async (req, res) => {
       if (['ADMIN', 'PLATFORM_ADMIN'].includes(role)) {
         permissions = ['*'];
       } else if (['COMMITTEE', 'SECRETARY'].includes(role)) {
-        permissions = ['COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'SOCIETY_MANAGE', 'NOC_MANAGE', 'NOC_APPROVE', 'VIOLATION_MANAGE', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'NOTICE_CREATE'];
+        permissions = ['COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'NOC_MANAGE', 'NOC_APPROVE', 'VIOLATION_MANAGE', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'NOTICE_CREATE'];
       } else if (['TREASURER', 'TREASURY'].includes(role)) {
         permissions = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'BILLING_CREATE', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'TAX_MANAGE', 'TAX_VIEW'];
       } else if (['CHECKER', 'TREASURY_CHECKER'].includes(role)) {
@@ -58,7 +58,7 @@ const getActivePermissions = async (req, res) => {
     } catch (_) {}
 
     if (['COMMITTEE', 'SECRETARY'].includes(role)) {
-      const perms = ['COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'SOCIETY_MANAGE', 'NOC_MANAGE', 'NOC_APPROVE', 'VIOLATION_MANAGE', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'NOTICE_CREATE'];
+      const perms = ['COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'NOC_MANAGE', 'NOC_APPROVE', 'VIOLATION_MANAGE', 'ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'NOTICE_CREATE'];
       permissions = Array.from(new Set([...permissions, ...perms]));
     } else if (['TREASURER', 'TREASURY'].includes(role)) {
       const perms = ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'BILLING_APPROVE', 'BILL_APPROVE', 'BILLING_CREATE', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'TAX_MANAGE', 'TAX_VIEW'];
@@ -105,7 +105,7 @@ const assignPosition = async (req, res) => {
         SELECT spa.id, u.first_name, u.last_name, u.email 
         FROM "${schema}".society_position_assignments spa
         JOIN "${schema}".position_master p ON spa.position_id = p.id
-        JOIN platform.users u ON spa.user_id = u.id
+        LEFT JOIN platform.users u ON spa.user_id = u.id
         WHERE p.code = $1
           AND spa.user_id != $2
           AND spa.status = 'ACTIVE'
@@ -170,7 +170,7 @@ const assignPosition = async (req, res) => {
     res.status(201).json({ message: 'Position assigned successfully', assignmentId: id });
   } catch (err) {
     console.error('Error assigning position:', err);
-    res.status(500).json({ error: 'Failed to assign position' });
+    res.status(500).json({ error: err.message || 'Failed to assign position' });
   }
 };
 

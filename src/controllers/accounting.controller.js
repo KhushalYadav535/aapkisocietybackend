@@ -110,6 +110,18 @@ const generateVoucherNumber = (type) => {
   return `${prefix}-${fy}-${Date.now().toString(36).toUpperCase()}`;
 };
 
+const toIsoDateString = (val) => {
+  if (!val) return new Date().toISOString().slice(0, 10);
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? new Date().toISOString().slice(0, 10) : val.toISOString().slice(0, 10);
+  }
+  const str = String(val).trim();
+  if (str.includes('T')) return str.split('T')[0];
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
+};
+
 // ─── Auto-sync billing & payments to accounting double-entry ─────────────────
 const syncBillingToAccounting = async (client, societyId) => {
   if (!societyId) return;
@@ -136,7 +148,7 @@ const syncBillingToAccounting = async (client, societyId) => {
     for (const b of billsR.rows) {
       const vId = uuidv4();
       const vNum = `VOU-JNL-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`;
-      const vDate = b.bill_date ? String(b.bill_date).split('T')[0] : new Date().toISOString().split('T')[0];
+      const vDate = toIsoDateString(b.bill_date);
       const amt = parseFloat(b.total_amount || 0);
       if (amt <= 0) continue;
       const narr = `Bill ${b.bill_number} for period ${b.billing_period || 'N/A'}`;
@@ -170,7 +182,7 @@ const syncBillingToAccounting = async (client, societyId) => {
     for (const p of payR.rows) {
       const vId = uuidv4();
       const vNum = `VOU-REC-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`;
-      const vDate = p.payment_date ? String(p.payment_date).split('T')[0] : new Date().toISOString().split('T')[0];
+      const vDate = toIsoDateString(p.payment_date);
       const amt = parseFloat(p.amount || 0);
       if (amt <= 0) continue;
       const narr = `Payment received ${p.id} via ${p.payment_method || 'UPI'}`;
@@ -579,6 +591,7 @@ exports.getIncomeStatement = async (req, res) => {
       return withTenant(req.user.society_id, async (client) => {
         await ensureAccountingTables(client);
         await seedDefaultCOA(client);
+        await syncBillingToAccounting(client, req.user.society_id);
         const { start_date, end_date } = req.query;
 
         const { rows } = await client.query(`
@@ -590,7 +603,7 @@ exports.getIncomeStatement = async (req, res) => {
           FROM ledger_accounts la
           LEFT JOIN ledger_entries le ON le.account_id = la.id
             AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' AND voucher_date BETWEEN $1 AND $2)
-          WHERE la.is_active = TRUE AND la.sub_category = 'INCOME'
+          WHERE la.is_active = TRUE AND (la.category = 'INCOME' OR la.sub_category = 'INCOME')
           GROUP BY la.id, la.code, la.name, la.sub_category, la.opening_balance
           ORDER BY la.code
         `, [start_date || '1900-01-01', end_date || '2100-12-31']);
@@ -604,7 +617,7 @@ exports.getIncomeStatement = async (req, res) => {
           FROM ledger_accounts la
           LEFT JOIN ledger_entries le ON le.account_id = la.id
             AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' AND voucher_date BETWEEN $1 AND $2)
-          WHERE la.is_active = TRUE AND la.sub_category = 'EXPENSE'
+          WHERE la.is_active = TRUE AND (la.category = 'EXPENSE' OR la.sub_category = 'EXPENSE')
           GROUP BY la.id, la.code, la.name, la.sub_category, la.opening_balance
           ORDER BY la.code
         `, [start_date || '1900-01-01', end_date || '2100-12-31']);

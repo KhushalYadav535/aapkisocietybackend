@@ -123,7 +123,7 @@ const requirePermission = (permissionCode) => {
       return next();
     }
     if (['COMMITTEE', 'SECRETARY'].includes(role) && 
-        ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'SOCIETY_MANAGE', 'NOTICE_CREATE', 'VIOLATION_MANAGE', 'NOC_MANAGE', 'NOC_APPROVE'].includes(permissionCode)) {
+        ['ACCOUNTING_MANAGE', 'AUDIT_VIEW', 'VOUCHER_VIEW', 'REPORT_VIEW', 'COMPLIANCE_MANAGE', 'NOTIFICATION_MANAGE', 'COMPLAINT_ASSIGN', 'COMPLAINT_RESOLVE', 'NOTICE_CREATE', 'VIOLATION_MANAGE', 'NOC_MANAGE', 'NOC_APPROVE'].includes(permissionCode)) {
       return next();
     }
     if (role === 'GUARD' && ['VISITOR_MANAGE', 'PATROL_MANAGE', 'SOS_RESPOND'].includes(permissionCode)) {

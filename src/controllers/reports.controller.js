@@ -13,6 +13,20 @@ exports.getCollectionReport = async (req, res) => {
 
       const schema = req.user.role === 'PLATFORM_ADMIN' ? 'platform' : `\"${getTenantSchemaName(societyId)}\"`;
 
+      const params = [];
+      let dateFilterPayment = '';
+      let dateFilterBill = '';
+      if (start_date) {
+        params.push(start_date);
+        dateFilterPayment += ` AND payment_date >= $${params.length}`;
+        dateFilterBill += ` AND b.bill_date >= $${params.length}`;
+      }
+      if (end_date) {
+        params.push(end_date);
+        dateFilterPayment += ` AND payment_date <= $${params.length}`;
+        dateFilterBill += ` AND b.bill_date <= $${params.length}`;
+      }
+
       const monthlyQuery = `
         SELECT
           DATE_TRUNC('month', payment_date) as month,
@@ -20,16 +34,11 @@ exports.getCollectionReport = async (req, res) => {
           SUM(amount) as total_collected
         FROM ${schema}.payments
         WHERE status = 'SUCCESS'
-        ${start_date ? 'AND payment_date >= $1' : ''}
-        ${end_date ? 'AND payment_date <= $2' : ''}
+        ${dateFilterPayment}
         GROUP BY DATE_TRUNC('month', payment_date)
         ORDER BY month DESC
         LIMIT 12
       `;
-
-      const params = [];
-      if (start_date) params.push(start_date);
-      if (end_date) params.push(end_date);
 
       const monthlyRes = await pool.query(monthlyQuery, params);
 
@@ -37,13 +46,12 @@ exports.getCollectionReport = async (req, res) => {
         SELECT
           COUNT(DISTINCT p.id) as total_payments,
           COALESCE(SUM(p.amount), 0) as total_collected,
-          COALESCE(SUM(CASE WHEN b.status IN ('APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE') THEN b.total_amount ELSE 0 END), 0) as total_billed,
-          COALESCE(SUM(CASE WHEN b.status IN ('APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE') THEN b.total_amount ELSE 0 END) - COALESCE(SUM(p.amount), 0), 0) as outstanding
+          COALESCE(SUM(CASE WHEN b.status NOT IN ('REJECTED', 'CANCELLED') THEN b.total_amount ELSE 0 END), 0) as total_billed,
+          COALESCE(SUM(CASE WHEN b.status NOT IN ('REJECTED', 'CANCELLED') THEN b.total_amount ELSE 0 END) - COALESCE(SUM(p.amount), 0), 0) as outstanding
         FROM ${schema}.bills b
         LEFT JOIN ${schema}.payments p ON p.bill_id = b.id AND p.status = 'SUCCESS'
-        WHERE b.status IN ('APPROVED', 'PAID', 'PARTIALLY_PAID', 'OVERDUE')
-        ${start_date ? 'AND b.bill_date >= $1' : ''}
-        ${end_date ? 'AND b.bill_date <= $2' : ''}
+        WHERE b.status NOT IN ('REJECTED', 'CANCELLED')
+        ${dateFilterBill}
       `;
 
       const summaryRes = await pool.query(summaryQuery, params);
