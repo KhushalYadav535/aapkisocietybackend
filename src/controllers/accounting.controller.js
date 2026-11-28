@@ -129,7 +129,7 @@ const syncBillingToAccounting = async (client, societyId) => {
     // 1. Sync bills that do not have vouchers yet
     const billsR = await client.query(`
       SELECT b.* FROM bills b
-      WHERE b.society_id = $1 AND b.status NOT IN ('REJECTED', 'CANCELLED')
+      WHERE (b.society_id = $1 OR b.society_id IS NULL) AND b.status NOT IN ('REJECTED', 'CANCELLED')
         AND NOT EXISTS (SELECT 1 FROM vouchers v WHERE v.narration LIKE '%' || b.bill_number || '%')
     `, [societyId]);
 
@@ -163,7 +163,7 @@ const syncBillingToAccounting = async (client, societyId) => {
     // 2. Sync successful payments that do not have vouchers yet
     const payR = await client.query(`
       SELECT p.* FROM payments p
-      WHERE p.society_id = $1 AND p.status = 'SUCCESS'
+      WHERE (p.society_id = $1 OR p.society_id IS NULL) AND p.status = 'SUCCESS'
         AND NOT EXISTS (SELECT 1 FROM vouchers v WHERE v.narration LIKE '%' || p.id || '%')
     `, [societyId]);
 
@@ -456,11 +456,11 @@ exports.getTrialBalance = async (req, res) => {
         await syncBillingToAccounting(client, req.user.society_id);
         const { from, to } = req.query;
 
-        let dateFilter = '';
+        let voucherDateFilter = '';
         const params = [];
         let idx = 1;
-        if (from)  { dateFilter += ` AND le.entry_date >= $${idx++}`; params.push(from); }
-        if (to)    { dateFilter += ` AND le.entry_date <= $${idx++}`; params.push(to); }
+        if (from) { voucherDateFilter += ` AND v.voucher_date >= $${idx++}`; params.push(from); }
+        if (to)   { voucherDateFilter += ` AND v.voucher_date <= $${idx++}`; params.push(to); }
 
         const { rows } = await client.query(`
           SELECT
@@ -470,7 +470,7 @@ exports.getTrialBalance = async (req, res) => {
             COALESCE(SUM(CASE WHEN le.entry_type = 'CREDIT' THEN le.amount ELSE 0 END), 0) AS total_credit
           FROM ledger_accounts la
           LEFT JOIN ledger_entries le ON le.account_id = la.id
-            AND le.voucher_id IN (SELECT id FROM vouchers WHERE status = 'APPROVED' ${dateFilter ? dateFilter.replace(/le\./g, '') : ''})
+            AND le.voucher_id IN (SELECT v.id FROM vouchers v WHERE v.status = 'APPROVED' ${voucherDateFilter})
           WHERE la.is_active = TRUE
           GROUP BY la.id, la.code, la.name, la.category, la.sub_category, la.opening_balance
           ORDER BY la.code

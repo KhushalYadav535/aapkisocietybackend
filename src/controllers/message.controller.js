@@ -29,14 +29,16 @@ exports.getConversations = (req, res) => {
         const r = await pool.query(`
           SELECT DISTINCT ON (c.conversation_id)
             c.*,
+            c.content as last_message,
+            c.created_at as last_message_at,
             CASE WHEN c.sender_id = $1 THEN c.receiver_id ELSE c.sender_id END as other_id,
             CASE WHEN c.sender_id = $1 THEN r.first_name ELSE s.first_name END as other_name,
             CASE WHEN c.sender_id = $1 THEN r.last_name ELSE s.last_name END as other_last_name,
             CASE WHEN c.sender_id = $1 THEN r.flat_number ELSE s.flat_number END as other_flat,
             CASE WHEN c.sender_id = $1 THEN r.wing ELSE s.wing END as other_wing
           FROM "${schema}".messages c
-          JOIN platform.users s ON s.id = c.sender_id
-          JOIN platform.users r ON r.id = c.receiver_id
+          LEFT JOIN platform.users s ON s.id = c.sender_id
+          LEFT JOIN platform.users r ON r.id = c.receiver_id
           WHERE c.conversation_id IN (
             SELECT conversation_id FROM "${schema}".messages
             WHERE sender_id = $1 OR receiver_id = $1
@@ -93,21 +95,36 @@ exports.getMessages = (req, res) => {
 
     if (isPostgresEnabled && societyId) {
       const schema = getTenantSchemaName(societyId);
+      const parts = conversationId.includes('__') ? conversationId.split('__') : conversationId.split('-');
+      const p1 = parts[0] || null;
+      const p2 = parts[1] || null;
       const altConvId1 = conversationId.includes('__') ? conversationId.replace('__', '-') : conversationId.replace('-', '__');
+
       return ensureMessageTables(societyId).then(async () => {
         const r = await pool.query(`
           SELECT m.*, s.first_name as sender_name, s.last_name as sender_last_name, s.flat_number as sender_flat, s.wing as sender_wing
           FROM "${schema}".messages m
-          JOIN platform.users s ON s.id = m.sender_id
-          WHERE m.conversation_id = $1 OR m.conversation_id = $2
+          LEFT JOIN platform.users s ON s.id = m.sender_id
+          WHERE m.conversation_id = $1 
+             OR m.conversation_id = $2
+             OR ($5::text IS NOT NULL AND $6::text IS NOT NULL AND (
+                 (m.sender_id = $5 AND m.receiver_id = $6) OR
+                 (m.sender_id = $6 AND m.receiver_id = $5)
+             ))
           ORDER BY m.created_at DESC
           LIMIT $3 OFFSET $4
-        `, [conversationId, altConvId1, limit, offset]);
+        `, [conversationId, altConvId1, limit, offset, p1, p2]);
 
         await pool.query(`
           UPDATE "${schema}".messages SET read_at = NOW()
-          WHERE (conversation_id = $1 OR conversation_id = $2) AND receiver_id = $3 AND read_at IS NULL
-        `, [conversationId, altConvId1, userId]);
+          WHERE (
+            conversation_id = $1 OR conversation_id = $2 OR
+            ($4::text IS NOT NULL AND $5::text IS NOT NULL AND (
+              (sender_id = $4 AND receiver_id = $5) OR
+              (sender_id = $5 AND receiver_id = $4)
+            ))
+          ) AND receiver_id = $3 AND read_at IS NULL
+        `, [conversationId, altConvId1, userId, p1, p2]);
 
         return res.json({ messages: r.rows.reverse() });
       }).catch((err) => {
