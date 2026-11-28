@@ -435,9 +435,13 @@ const createTenantSchema = async (tenantId) => {
         delegated_to_user_id TEXT,
         delegation_start DATE,
         delegation_end DATE,
+        notes TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+    await client.query(`
+      ALTER TABLE society_position_assignments ADD COLUMN IF NOT EXISTS notes TEXT
     `);
 
     await client.query(`

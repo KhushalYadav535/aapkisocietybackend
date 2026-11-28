@@ -28,14 +28,17 @@ exports.getStats = (req, res) => {
       return withTenant(req.user.society_id, async (client) => {
         const isResident = req.user.role === 'RESIDENT';
         const [usersR, flatsR, complaintsR, billsR, visitorsR, paymentsR, noticesR, monthlyPaymentsR, parcelsR, patrolsR] = await Promise.all([
-          client.query('SELECT COUNT(*)::int AS c FROM platform.users WHERE society_id = $1 AND is_active = 1', [req.user.society_id]),
+          client.query('SELECT COUNT(*)::int AS c FROM platform.users WHERE society_id = $1', [req.user.society_id]),
           client.query('SELECT COUNT(*)::int AS c FROM platform.flats WHERE society_id = $1', [req.user.society_id]),
           isResident
             ? client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE raised_by = $1 AND status IN ('OPEN','IN_PROGRESS')", [req.user.id])
             : client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE status IN ('OPEN','IN_PROGRESS')"),
           isResident
-            ? client.query("SELECT COUNT(*)::int AS c FROM bills WHERE member_id = $1 AND status NOT IN ('PAID','CANCELLED')", [req.user.id])
-            : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status NOT IN ('PAID','CANCELLED')"),
+            ? client.query(`SELECT COUNT(*)::int AS c FROM bills 
+                            WHERE status NOT IN ('PAID','REJECTED','CANCELLED')
+                              AND (member_id = $1 OR (flat_id IS NOT NULL AND $2 <> '' AND flat_id = $2) OR ($3 <> '' AND flat_id IS NOT NULL AND flat_id = $3) OR (flat_id IS NOT NULL AND $3 <> '' AND flat_id IN (SELECT id FROM platform.flats WHERE flat_number = $3 AND society_id = $4)) OR ($3 <> '' AND bill_number LIKE '%' || $3))`,
+                            [req.user.id, req.user.flat_id || '', req.user.flat_number || '', req.user.society_id])
+            : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE (society_id = $1 OR society_id IS NULL) AND status NOT IN ('PAID','REJECTED','CANCELLED')"),
           client.query('SELECT COUNT(*)::int AS c FROM visitors WHERE DATE(check_in) = CURRENT_DATE'),
           isResident
             ? client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND member_id = $1", [req.user.id])
@@ -326,7 +329,7 @@ exports.getDashboardOverview = (req, res) => {
         const [statsR, activitiesR, collectionR, complaintR] = await Promise.all([
           // Stats queries (8 parallel)
           Promise.all([
-            client.query('SELECT COUNT(*)::int AS c FROM platform.users WHERE society_id = $1 AND is_active = 1', [societyId]),
+            client.query('SELECT COUNT(*)::int AS c FROM platform.users WHERE society_id = $1', [societyId]),
             client.query('SELECT COUNT(*)::int AS c FROM platform.flats WHERE society_id = $1', [societyId]),
             isResident
               ? client.query("SELECT COUNT(*)::int AS c FROM complaints WHERE raised_by = $1 AND status IN ('OPEN','IN_PROGRESS')", [userId])
@@ -334,9 +337,9 @@ exports.getDashboardOverview = (req, res) => {
             isResident
               ? client.query(`SELECT COUNT(*)::int AS c FROM bills 
                               WHERE status NOT IN ('PAID','REJECTED','CANCELLED')
-                                AND (member_id = $1 OR flat_id = $2 OR (flat_id IS NOT NULL AND $3 <> '' AND flat_id = $3) OR (flat_id IS NOT NULL AND flat_id IN (SELECT id FROM platform.flats WHERE flat_number = $3 AND society_id = $4)) OR ($3 <> '' AND bill_number LIKE '%' || $3))`,
+                                AND (member_id = $1 OR (flat_id IS NOT NULL AND $2 <> '' AND flat_id = $2) OR ($3 <> '' AND flat_id IS NOT NULL AND flat_id = $3) OR (flat_id IS NOT NULL AND $3 <> '' AND flat_id IN (SELECT id FROM platform.flats WHERE flat_number = $3 AND society_id = $4)) OR ($3 <> '' AND bill_number LIKE '%' || $3))`,
                               [userId, req.user.flat_id || '', req.user.flat_number || '', societyId])
-              : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE status NOT IN ('PAID','REJECTED','CANCELLED')"),
+              : client.query("SELECT COUNT(*)::int AS c FROM bills WHERE (society_id = $1 OR society_id IS NULL) AND status NOT IN ('PAID','REJECTED','CANCELLED')"),
             client.query("SELECT COUNT(*)::int AS c FROM visitors WHERE (status = 'CHECKED_IN' AND check_out IS NULL) OR DATE(check_in) = CURRENT_DATE"),
             isResident
               ? client.query("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE status = 'SUCCESS' AND member_id = $1", [userId])

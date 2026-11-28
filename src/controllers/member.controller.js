@@ -10,7 +10,7 @@ const safeUser = (u) => ({ id: u.id, email: u.email, first_name: u.first_name, l
 exports.getAll = (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 50, 1000);
+    const limit = Math.min(parseInt(req.query.limit) || 1000, 2000);
     const offset = (page - 1) * limit;
 
     if (isPostgresEnabled) {

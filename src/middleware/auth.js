@@ -54,7 +54,12 @@ const authenticate = async (req, res, next) => {
       }
     }
 
-    const mfaExempt = ['/api/auth/mfa/setup', '/api/auth/mfa/verify', '/api/auth/email-otp/send', '/api/auth/email-otp/verify', '/api/auth/me', '/api/auth/login', '/mfa/setup', '/mfa/verify', '/me', '/login', '/api/rbac/me/permissions', '/me/permissions'];
+    const mfaExempt = [
+      '/api/auth/mfa/setup', '/api/auth/mfa/verify', '/api/auth/mfa/sms-fallback', '/api/auth/mfa/request-reset',
+      '/api/auth/email-otp/send', '/api/auth/email-otp/verify', '/api/auth/me', '/api/auth/login',
+      '/mfa/setup', '/mfa/verify', '/mfa/sms-fallback', '/mfa/request-reset', '/me', '/login',
+      '/api/rbac/me/permissions', '/me/permissions'
+    ];
     if (MFA_REQUIRED_ROLES.includes(user.role) && !user.mfa_enabled && !mfaExempt.includes(req.path)) {
       return res.status(403).json({
         error: 'Email OTP verification required for this role.',

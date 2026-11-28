@@ -30,6 +30,8 @@ router.put('/change-password', authenticate, [
   body('newPassword').isLength({ min: 8 }),
 ], validate, authController.changePassword);
 router.post('/mfa/setup', authenticate, authController.setupMFA);
+router.post('/mfa/sms-fallback', authenticate, authController.sendMfaSmsFallback);
+router.post('/mfa/request-reset', authenticate, authController.requestMfaReset);
 router.post('/mfa/verify', authenticate, [
   body('otp').notEmpty().withMessage('OTP required'),
 ], validate, authController.verifyMFA);

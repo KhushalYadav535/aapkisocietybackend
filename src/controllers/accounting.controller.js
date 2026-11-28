@@ -64,9 +64,6 @@ const ensureAccountingTables = async (client) => {
 
 // Seed a minimal COA if none exists
 const seedDefaultCOA = async (client) => {
-  const { rows } = await client.query('SELECT COUNT(*) AS cnt FROM ledger_accounts');
-  if (parseInt(rows[0].cnt, 10) > 0) return;
-
   const defaults = [
     { code: '1001', name: 'Cash',                  category: 'ASSET',     sub_category: 'Current Asset',    is_system: true },
     { code: '1002', name: 'Bank Account',           category: 'ASSET',     sub_category: 'Current Asset',    is_system: true },
@@ -132,17 +129,47 @@ const syncBillingToAccounting = async (client, societyId) => {
     const accR = await client.query("SELECT id, code FROM ledger_accounts WHERE code IN ('1001', '1002', '1003', '4001')");
     const accMap = {};
     accR.rows.forEach(r => { accMap[r.code] = r.id; });
-    const bankAccId = accMap['1002'] || accMap['1001'];
-    const arAccId = accMap['1003'];
-    const incomeAccId = accMap['4001'];
+    let bankAccId = accMap['1002'] || accMap['1001'];
+    let arAccId = accMap['1003'];
+    let incomeAccId = accMap['4001'];
 
-    if (!arAccId || !incomeAccId) return;
+    if (!bankAccId) {
+      bankAccId = uuidv4();
+      await client.query("INSERT INTO ledger_accounts (id, code, name, category, sub_category, is_system, is_active, opening_balance) VALUES ($1, '1002', 'Bank Account', 'ASSET', 'Current Asset', TRUE, TRUE, 0) ON CONFLICT (code) DO NOTHING", [bankAccId]);
+    }
+    if (!arAccId) {
+      arAccId = uuidv4();
+      await client.query("INSERT INTO ledger_accounts (id, code, name, category, sub_category, is_system, is_active, opening_balance) VALUES ($1, '1003', 'Accounts Receivable', 'ASSET', 'Current Asset', TRUE, TRUE, 0) ON CONFLICT (code) DO NOTHING", [arAccId]);
+    }
+    if (!incomeAccId) {
+      incomeAccId = uuidv4();
+      await client.query("INSERT INTO ledger_accounts (id, code, name, category, sub_category, is_system, is_active, opening_balance) VALUES ($1, '4001', 'Maintenance Income', 'INCOME', 'Revenue', TRUE, TRUE, 0) ON CONFLICT (code) DO NOTHING", [incomeAccId]);
+    }
 
-    // 1. Sync bills that do not have vouchers yet
+    // Clean up empty auto-synced vouchers with no ledger entries
+    await client.query(`
+      DELETE FROM vouchers v
+      WHERE (v.narration LIKE 'Bill %' OR v.narration LIKE 'Payment received %')
+        AND NOT EXISTS (SELECT 1 FROM ledger_entries le WHERE le.voucher_id = v.id)
+    `);
+
+    // Ensure all existing auto-synced vouchers are APPROVED
+    await client.query(`
+      UPDATE vouchers
+      SET status = 'APPROVED'
+      WHERE status != 'APPROVED'
+        AND (narration LIKE 'Bill %' OR narration LIKE 'Payment received %')
+    `);
+
+    // 1. Sync bills that do not have vouchers with entries yet
     const billsR = await client.query(`
       SELECT b.* FROM bills b
       WHERE (b.society_id = $1 OR b.society_id IS NULL) AND b.status NOT IN ('REJECTED', 'CANCELLED')
-        AND NOT EXISTS (SELECT 1 FROM vouchers v WHERE v.narration LIKE '%' || b.bill_number || '%')
+        AND NOT EXISTS (
+          SELECT 1 FROM vouchers v
+          JOIN ledger_entries le ON le.voucher_id = v.id
+          WHERE v.narration LIKE '%' || b.bill_number || '%'
+        )
     `, [societyId]);
 
     for (const b of billsR.rows) {
@@ -176,7 +203,11 @@ const syncBillingToAccounting = async (client, societyId) => {
     const payR = await client.query(`
       SELECT p.* FROM payments p
       WHERE (p.society_id = $1 OR p.society_id IS NULL) AND p.status = 'SUCCESS'
-        AND NOT EXISTS (SELECT 1 FROM vouchers v WHERE v.narration LIKE '%' || p.id || '%')
+        AND NOT EXISTS (
+          SELECT 1 FROM vouchers v
+          JOIN ledger_entries le ON le.voucher_id = v.id
+          WHERE v.narration LIKE '%' || p.id || '%'
+        )
     `, [societyId]);
 
     for (const p of payR.rows) {

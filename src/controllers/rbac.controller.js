@@ -91,6 +91,7 @@ const assignPosition = async (req, res) => {
 
   try {
     const schema = getTenantSchemaName(societyId);
+    await pool.query(`ALTER TABLE "${schema}".society_position_assignments ADD COLUMN IF NOT EXISTS notes TEXT`);
     
     // Find position ID
     const posResult = await pool.query(`SELECT id FROM "${schema}".position_master WHERE code = $1`, [positionCode]);
@@ -126,8 +127,9 @@ const assignPosition = async (req, res) => {
           `, [activeSingleCheck.rows[0].id]);
         } else {
           const holder = activeSingleCheck.rows[0];
+          const holderName = `${holder.first_name || ''} ${holder.last_name || ''}`.trim() || holder.email;
           return res.status(400).json({ 
-            error: `An active ${positionCode} already exists for this term: ${holder.first_name || ''} ${holder.last_name || ''} (${holder.email}). Please expire or end the current term first or select Replace Existing Term.` 
+            error: `Position ${positionCode} is currently actively held by ${holderName} (${holder.email}). Please end their active term first, or select Replace Existing Term.` 
           });
         }
       }
@@ -170,7 +172,9 @@ const assignPosition = async (req, res) => {
     res.status(201).json({ message: 'Position assigned successfully', assignmentId: id });
   } catch (err) {
     console.error('Error assigning position:', err);
-    res.status(500).json({ error: err.message || 'Failed to assign position' });
+    let errMsg = 'Failed to assign position. Please verify details and try again.';
+    if (err.code === '23505') errMsg = 'An active assignment already exists for this position.';
+    res.status(500).json({ error: errMsg });
   }
 };
 

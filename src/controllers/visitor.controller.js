@@ -22,6 +22,12 @@ const ensureVisitorTable = async (client) => {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Auto-checkout stale visitors still checked in after 24 hours
+  await client.query(`
+    UPDATE visitors
+    SET status = 'CHECKED_OUT', check_out = check_in + INTERVAL '4 hours'
+    WHERE status = 'CHECKED_IN' AND check_out IS NULL AND check_in < NOW() - INTERVAL '24 hours'
+  `);
 };
 
 exports.getAll = (req, res) => {

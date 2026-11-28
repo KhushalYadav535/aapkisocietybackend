@@ -635,82 +635,83 @@ const ensureDunningTables = async (client) => {
 };
 
 exports.getArrearsAging = (req, res) => {
-  if (!isPostgresEnabled || !req.user.society_id) {
-    const db = getDb();
-    const sid = req.user?.society_id;
-    const bills = db.get('bills').filter(b => b.society_id === sid && !['PAID', 'REJECTED', 'CANCELLED'].includes(b.status)).value() || [];
-    const today = new Date().toISOString().split('T')[0];
-    const buckets = [
-      { label: '0-30 days', days_from: 0, days_to: 30 },
-      { label: '31-60 days', days_from: 31, days_to: 60 },
-      { label: '61-90 days', days_from: 61, days_to: 90 },
-      { label: '91-180 days', days_from: 91, days_to: 180 },
-      { label: '180+ days', days_from: 181, days_to: null },
-    ];
-    const result = buckets.map(b => {
-      const matchBills = bills.filter(bill => {
-        if (!bill.due_date) return false;
-        const diffDays = Math.max(0, Math.floor((new Date(today).getTime() - new Date(bill.due_date).getTime()) / (1000 * 3600 * 24)));
-        const outstanding = (bill.total_amount || 0) - (bill.paid_amount || 0);
-        if (outstanding <= 0) return false;
-        if (b.days_to === null) return diffDays >= b.days_from;
-        return diffDays >= b.days_from && diffDays <= b.days_to;
-      });
+  const bucketsDef = [
+    { label: '0-30 days', days_from: 0, days_to: 30 },
+    { label: '31-60 days', days_from: 31, days_to: 60 },
+    { label: '61-90 days', days_from: 61, days_to: 90 },
+    { label: '91-180 days', days_from: 91, days_to: 180 },
+    { label: '180+ days', days_from: 181, days_to: null },
+  ];
+
+  const computeBuckets = (billsList) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayTime = today.getTime();
+
+    const processed = billsList.map(b => {
+      const outstanding = Number((Number(b.total_amount || 0) - Number(b.paid_amount || 0)).toFixed(2));
+      let daysOverdue = 0;
+      if (b.due_date) {
+        const d = new Date(b.due_date);
+        d.setHours(0, 0, 0, 0);
+        if (!isNaN(d.getTime()) && d.getTime() <= todayTime) {
+          daysOverdue = Math.max(1, Math.floor((todayTime - d.getTime()) / (1000 * 3600 * 24)));
+        }
+      }
+      if (b.status === 'OVERDUE' && daysOverdue === 0) {
+        daysOverdue = 1;
+      }
       return {
-        label: b.label,
-        days_from: b.days_from,
-        days_to: b.days_to,
-        total_amount: matchBills.reduce((s, bill) => s + ((bill.total_amount || 0) - (bill.paid_amount || 0)), 0),
-        bill_count: matchBills.length,
-        oldest_date: matchBills.map(b => b.bill_date).sort()[0] || null,
+        ...b,
+        outstanding,
+        days_overdue: daysOverdue,
+        bill_date: b.bill_date ? String(b.bill_date).split('T')[0] : null
       };
-    });
-    return res.json({ buckets: result, generated_at: new Date().toISOString() });
-  }
-  return withTenant(req.user.society_id, async (client) => {
-    await ensureTenantBillingTables(client);
-    const r = await client.query(`
-      SELECT
-        id, bill_number, bill_date, due_date, total_amount, paid_amount, status,
-        (COALESCE(total_amount::numeric, 0) - COALESCE(paid_amount::numeric, 0)) AS outstanding,
-        CASE
-          WHEN due_date IS NOT NULL AND NULLIF(due_date::text, '') IS NOT NULL AND NULLIF(due_date::text, '')::date <= CURRENT_DATE
-          THEN GREATEST(1, (CURRENT_DATE - NULLIF(due_date::text, '')::date))
-          ELSE 0
-        END AS days_overdue
-      FROM bills
-      WHERE status NOT IN ('PAID', 'REJECTED', 'CANCELLED')
-        AND (COALESCE(total_amount::numeric, 0) - COALESCE(paid_amount::numeric, 0)) > 0
-    `);
+    }).filter(b => b.outstanding > 0);
 
-    const bucketsDef = [
-      { label: '0-30 days', days_from: 0, days_to: 30 },
-      { label: '31-60 days', days_from: 31, days_to: 60 },
-      { label: '61-90 days', days_from: 61, days_to: 90 },
-      { label: '91-180 days', days_from: 91, days_to: 180 },
-      { label: '180+ days', days_from: 181, days_to: null },
-    ];
-
-    const result = bucketsDef.map(b => {
-      const matchBills = r.rows.filter(row => {
-        const d = Number(row.days_overdue);
-        if (b.days_to === null) return d >= b.days_from;
-        return d >= b.days_from && d <= b.days_to;
+    return bucketsDef.map(bucket => {
+      const matchBills = processed.filter(b => {
+        const d = b.days_overdue;
+        if (bucket.days_to === null) return d >= bucket.days_from;
+        return d >= bucket.days_from && d <= bucket.days_to;
       });
-      const totalAmount = matchBills.reduce((s, row) => s + Number(row.outstanding || 0), 0);
-      const oldestDate = matchBills.map(row => row.bill_date).filter(Boolean).sort()[0] || null;
+      const totalAmount = Number(matchBills.reduce((s, b) => s + b.outstanding, 0).toFixed(2));
+      const oldestDate = matchBills.map(b => b.bill_date).filter(Boolean).sort()[0] || null;
       return {
-        label: b.label,
-        days_from: b.days_from,
-        days_to: b.days_to,
+        label: bucket.label,
+        days_from: bucket.days_from,
+        days_to: bucket.days_to,
         total_amount: totalAmount,
         bill_count: matchBills.length,
         oldest_date: oldestDate
       };
     });
+  };
 
+  if (!isPostgresEnabled || !req.user.society_id) {
+    const db = getDb();
+    const sid = req.user?.society_id;
+    const bills = db.get('bills').filter(b => b.society_id === sid && !['PAID', 'REJECTED', 'CANCELLED'].includes(b.status)).value() || [];
+    return res.json({ buckets: computeBuckets(bills), generated_at: new Date().toISOString() });
+  }
+
+  return withTenant(req.user.society_id, async (client) => {
+    await ensureTenantBillingTables(client);
+    const r = await client.query(`
+      SELECT
+        id, bill_number, bill_date, due_date, total_amount, paid_amount, status
+      FROM bills
+      WHERE (society_id = $1 OR society_id IS NULL)
+        AND status NOT IN ('PAID', 'REJECTED', 'CANCELLED')
+        AND (COALESCE(total_amount::numeric, 0) - COALESCE(paid_amount::numeric, 0)) > 0
+    `, [req.user.society_id]);
+
+    const result = computeBuckets(r.rows);
     return res.json({ buckets: result, generated_at: new Date().toISOString() });
-  }).catch((err) => { console.error('getArrearsAging error:', err); res.status(500).json({ error: 'Failed to get arrears aging' }); });
+  }).catch((err) => {
+    console.error('getArrearsAging error:', err);
+    res.status(500).json({ error: 'Failed to get arrears aging' });
+  });
 };
 
 exports.getDefaultersList = (req, res) => {
@@ -750,7 +751,7 @@ exports.getDefaultersList = (req, res) => {
         }
       }
     });
-    return res.json({ defaulters: Object.values(memberMap).sort((a, b) => b.total_outstanding - a.total_outstanding) });
+    return res.json({ defaulters: Object.values(memberMap).filter(d => d.days_overdue > 0).sort((a, b) => b.total_outstanding - a.total_outstanding) });
   }
   return withTenant(req.user.society_id, async (client) => {
     await ensureTenantBillingTables(client);
@@ -766,10 +767,11 @@ exports.getDefaultersList = (req, res) => {
         COUNT(b.id) AS bill_count
       FROM bills b
       LEFT JOIN platform.users u ON b.member_id = u.id
-      WHERE b.society_id = $1
+      WHERE (b.society_id = $1 OR b.society_id IS NULL)
         AND b.status NOT IN ('PAID', 'REJECTED', 'CANCELLED')
         AND (b.total_amount - COALESCE(b.paid_amount, 0)) > 0
       GROUP BY b.member_id, u.first_name, u.last_name, u.flat_number, u.wing
+      HAVING MAX(CASE WHEN b.due_date IS NOT NULL AND b.due_date::date <= CURRENT_DATE THEN GREATEST(1, (CURRENT_DATE - b.due_date::date)) ELSE 0 END) > 0
       ORDER BY total_outstanding DESC
     `, [req.user.society_id]);
     return res.json({

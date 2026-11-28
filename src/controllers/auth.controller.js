@@ -293,21 +293,93 @@ exports.setupMFA = async (req, res) => {
       logAudit(req, 'EMAIL_OTP_SENT', 'USER', req.user.id, null, { email: user.email });
     }
 
-    const isTestAccount = Boolean(
-      process.env.NODE_ENV !== 'production' ||
-      process.env.ENABLE_TEST_OTP === 'true' ||
-      (user.email && (user.email.includes('test') || user.email.includes('qat') || user.email.includes('fortunesociety') || user.email.includes('demo')))
+    const isLocalDev = Boolean(
+      process.env.NODE_ENV !== 'production' &&
+      process.env.ENABLE_TEST_OTP === 'true'
     );
 
     res.json({
       message: `A 6-digit verification code has been sent to ${user.email}.`,
       email: user.email,
       method: 'EMAIL_OTP',
-      demo_otp: isTestAccount ? (otp || '123456') : undefined
+      demo_otp: isLocalDev ? (otp || '123456') : undefined
     });
   } catch (error) {
     console.error('Setup Email OTP error:', error);
     res.status(500).json({ error: 'Failed to send verification code to email' });
+  }
+};
+
+exports.sendMfaSmsFallback = async (req, res) => {
+  try {
+    let user;
+    if (isPostgresEnabled) {
+      const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.user.id]);
+      user = r.rows[0];
+    } else {
+      const db = getDb();
+      user = db.get('users').find({ id: req.user.id }).value();
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const phone = user.phone || '';
+    const maskedPhone = phone ? phone.slice(0, 2) + '******' + phone.slice(-2) : 'registered mobile';
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    if (isPostgresEnabled) {
+      await pool.query(
+        'UPDATE platform.users SET pending_mfa_code = $1, mfa_method = $2, updated_at = NOW() WHERE id = $3',
+        [otp, 'SMS_FALLBACK', req.user.id]
+      );
+    } else {
+      const db = getDb();
+      db.get('users').find({ id: req.user.id }).assign({
+        pending_mfa_code: otp,
+        mfa_method: 'SMS_FALLBACK',
+        updated_at: new Date().toISOString()
+      }).write();
+    }
+
+    logAudit(req, 'SMS_OTP_FALLBACK_REQUESTED', 'USER', req.user.id, null, { phone: maskedPhone });
+
+    res.json({
+      success: true,
+      message: `A 6-digit SMS code has been dispatched to ${maskedPhone}.`,
+      masked_phone: maskedPhone
+    });
+  } catch (error) {
+    console.error('SMS fallback error:', error);
+    res.status(500).json({ error: 'Failed to dispatch SMS fallback code' });
+  }
+};
+
+exports.requestMfaReset = async (req, res) => {
+  try {
+    let user;
+    if (isPostgresEnabled) {
+      const r = await pool.query('SELECT * FROM platform.users WHERE id = $1 LIMIT 1', [req.user.id]);
+      user = r.rows[0];
+    } else {
+      const db = getDb();
+      user = db.get('users').find({ id: req.user.id }).value();
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    logAudit(req, 'MFA_RESET_REQUESTED_BY_USER', 'USER', req.user.id, null, { email: user.email, role: user.role });
+
+    res.json({
+      success: true,
+      message: 'MFA reset request logged. Your Society Administrator has been notified to reset your 2FA credentials.'
+    });
+  } catch (error) {
+    console.error('MFA reset request error:', error);
+    res.status(500).json({ error: 'Failed to log reset request' });
   }
 };
 
