@@ -65,27 +65,58 @@ app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet());
+
+// Robust CORS middleware & explicit preflight
+const allowedOrigins = [
+  'https://www.aapkisociety.in',
+  'https://aapkisociety.in',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:5173',
+  ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(u => u.trim()) : [])
+];
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return true;
+  if (/^https:\/\/(.*\.)?aapkisociety\.in$/.test(origin)) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  return false;
+};
+
+// Immediate preflight & origin response headers
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (isOriginAllowed(origin)) {
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, society-id');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin) return callback(null, true);
-    // In development, allow any localhost port
-    if (process.env.NODE_ENV === 'development' && /^http:\/\/localhost(:\d+)?$/.test(origin)) {
-      return callback(null, true);
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, false);
     }
-    // In production, check against FRONTEND_URL
-    const allowed = (process.env.FRONTEND_URL || 'http://localhost:3000').split(',').map(u => u.trim());
-    if (allowed.includes(origin)) return callback(null, true);
-    
-    // Fallback: strictly allow aapkisociety.in and www.aapkisociety.in
-    if (/^https:\/\/(www\.)?aapkisociety\.in$/.test(origin)) {
-      return callback(null, true);
-    }
-    
-    callback(new Error(`CORS: origin ${origin} not allowed`));
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'society-id'],
 }));
+app.options('*', (req, res) => res.sendStatus(204));
 
 // Gzip compression — reduces JSON response payload by 60–80%
 app.use(compression());
@@ -247,6 +278,11 @@ app.get('/api/health/ready', async (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
+  const origin = req.headers.origin;
+  if (isOriginAllowed(origin) && origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
   res.status(err.status || 500).json({
     error: err.message || 'Internal Server Error',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
